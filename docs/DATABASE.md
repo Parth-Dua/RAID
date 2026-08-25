@@ -106,7 +106,7 @@ erDiagram
     }
     FINAL_SUBMISSIONS {
         uuid id PK
-        uuid game_id FK UK "UNIQUE = concurrency guard"
+        uuid game_id FK "unique - concurrency guard, see below"
         uuid submitted_by FK
         text root_cause
         jsonb supporting_evidence_ids
@@ -114,7 +114,7 @@ erDiagram
     }
     GAME_RESULTS {
         uuid id PK
-        uuid game_id FK UK
+        uuid game_id FK "unique"
         int root_cause_accuracy
         int evidence_quality
         int remediation_quality
