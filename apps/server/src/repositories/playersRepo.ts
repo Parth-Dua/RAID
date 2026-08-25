@@ -81,6 +81,10 @@ export async function setPlayerConnected(db: Database, playerId: string, connect
   return row;
 }
 
+export async function deletePlayer(db: Database, playerId: string): Promise<void> {
+  await db.delete(players).where(eq(players.id, playerId));
+}
+
 export async function findPlayerByDisplayNameInRoom(
   db: Database,
   roomId: string,

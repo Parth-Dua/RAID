@@ -103,6 +103,34 @@ export async function setPlayerConnected(db: Database, roomId: string, playerId:
   return updated;
 }
 
+/** If `departingPlayerId` was host and the room is still in LOBBY, hand the host badge to another
+ * connected player (oldest-joined first). No-op otherwise. Shared by disconnect and leave, so both
+ * paths behave identically rather than one branch drifting from the other over time. */
+export async function transferHostIfNeeded(db: Database, roomId: string, departingPlayerId: string): Promise<void> {
+  const room = await roomsRepo.findRoomById(db, roomId);
+  if (!room || room.phase !== "LOBBY" || room.hostPlayerId !== departingPlayerId) return;
+  const players = await playersRepo.findPlayersInRoom(db, roomId);
+  const nextHost = players.find((p) => p.id !== departingPlayerId && p.connected);
+  if (nextHost) await roomsRepo.setHostPlayer(db, roomId, nextHost.id);
+}
+
+/**
+ * Voluntary leave. Only legal in LOBBY: once a game has started, a player's role and evidence
+ * ledger are bound to game_players/game_evidence FK rows, so they can disconnect (handled
+ * separately) but not be deleted without corrupting game history. Deleting the row immediately
+ * (rather than waiting out the ghost-join grace window) frees the seat right away for someone else.
+ */
+export async function leaveRoom(db: Database, roomId: string, playerId: string): Promise<void> {
+  const room = await roomsRepo.findRoomById(db, roomId);
+  if (!room) throw new RaidError("ROOM_NOT_FOUND", "Room not found");
+  if (room.phase !== "LOBBY") {
+    throw new RaidError("INVALID_PHASE", "Can't leave after the incident has started - you can disconnect instead");
+  }
+  await transferHostIfNeeded(db, roomId, playerId);
+  await playersRepo.deletePlayer(db, playerId);
+  await appendEvent(db, { roomId, type: "PLAYER_LEFT", payload: { playerId, voluntary: true }, actorPlayerId: playerId });
+}
+
 export interface StartGameResult {
   gameId: string;
   scenarioId: string;

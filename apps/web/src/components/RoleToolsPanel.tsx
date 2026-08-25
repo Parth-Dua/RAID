@@ -1,11 +1,22 @@
 import { useState } from "react";
 import { useGame } from "../state/GameProvider.js";
+import type { Role } from "@raid/shared";
 
 interface ToolLogEntry {
   output: string;
   unlockedCount: number;
   atSeconds: number;
 }
+
+const ROLE_OBJECTIVE: Record<Role, string> = {
+  backend_engineer:
+    "Investigate the application layer: recent deploys, logs, traces, and per-endpoint stats. Look for what changed right before symptoms began.",
+  database_engineer:
+    "Investigate the database layer: connection pool health, query volume, locks, and replication. Distinguish a slow query from a volume problem.",
+  sre: "Investigate infrastructure: CPU/memory, pod health, request rate, and network. Rule out (or confirm) that this is a capacity or infra issue.",
+  incident_commander:
+    "You have no raw evidence of your own. Track the big picture, ask your team what they're finding, and submit the final diagnosis once the team has converged.",
+};
 
 export function RoleToolsPanel() {
   const { gameSnapshot, actions } = useGame();
@@ -14,11 +25,7 @@ export function RoleToolsPanel() {
 
   if (!gameSnapshot) return null;
 
-  if (gameSnapshot.myRole === "incident_commander") {
-    return <IncidentCommanderPanel />;
-  }
-
-  if (gameSnapshot.tools.length === 0) {
+  if (!gameSnapshot.myRole) {
     return <div className="text-ink-400 text-sm">No role assigned yet.</div>;
   }
 
@@ -39,6 +46,14 @@ export function RoleToolsPanel() {
 
   return (
     <div className="flex flex-col gap-3">
+      <p className="text-[11px] text-ink-400 leading-relaxed border-l-2 border-ink-700 pl-2">
+        {ROLE_OBJECTIVE[gameSnapshot.myRole]}
+      </p>
+
+      {gameSnapshot.tools.length === 0 && (
+        <div className="text-xs text-ink-500">No tools of your own - use chat and the shared incident board.</div>
+      )}
+
       {gameSnapshot.tools.map((tool) => {
         const entry = log[tool.id];
         return (
@@ -66,14 +81,5 @@ export function RoleToolsPanel() {
         );
       })}
     </div>
-  );
-}
-
-function IncidentCommanderPanel() {
-  return (
-    <p className="text-xs text-ink-400 leading-relaxed">
-      You have no simulated tools. Coordinate the team via chat, watch the shared incident board, and submit the
-      final diagnosis (below, in Shared Incident) when the team has converged on a root cause.
-    </p>
   );
 }

@@ -17,21 +17,12 @@ export function PrivateFindingsPanel() {
 
   if (!gameSnapshot) return null;
 
-  if (gameSnapshot.myRole === "incident_commander") {
-    return (
-      <p className="text-xs text-ink-400 leading-relaxed">
-        As Incident Commander you don't have private tools — this space is where your teammates keep the evidence
-        they've personally unlocked. Ask them what they're seeing.
-      </p>
-    );
-  }
-
   if (gameSnapshot.evidence.length === 0) {
     return <div className="text-xs text-ink-500">Run tools on the left to start unlocking evidence.</div>;
   }
 
   async function share(evidence: PublicEvidence) {
-    await actions.addKnownFact(`${evidence.title}: ${summarize(evidence.content)}`, evidence.id);
+    await actions.addKnownFact(`${evidence.title}: ${summarize(evidence.content)}`, "fact", evidence.id);
     setSharedIds((prev) => new Set(prev).add(evidence.id));
   }
 

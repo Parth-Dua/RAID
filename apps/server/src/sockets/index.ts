@@ -10,6 +10,7 @@ import {
   HypothesisCreatePayload,
   HypothesisSupportPayload,
   KnownFactAddPayload,
+  PlayerLeavePayload,
   PlayerReadyPayload,
   ToolExecutePayload,
 } from "@raid/shared";
@@ -21,7 +22,6 @@ import { isRateLimited } from "./rateLimiter.js";
 import { startClock, stopClock } from "./clock.js";
 import * as roomService from "../services/roomService.js";
 import * as gameService from "../services/gameService.js";
-import * as playersRepo from "../repositories/playersRepo.js";
 import * as roomsRepo from "../repositories/roomsRepo.js";
 import {
   emitEvidenceUnlocked,
@@ -49,6 +49,7 @@ export function registerSocketHandlers(io: Server): void {
     void handleConnection(io, socket);
 
     socket.on("player:ready", withHandler(io, socket, "player:ready", PlayerReadyPayload, onPlayerReady));
+    socket.on("player:leave", withHandler(io, socket, "player:leave", PlayerLeavePayload, onPlayerLeave));
     socket.on("game:start", withHandler(io, socket, "game:start", GameStartPayload, onGameStart));
     socket.on("chat:send", withHandler(io, socket, "chat:send", ChatSendPayload, onChatSend));
     socket.on("tool:execute", withHandler(io, socket, "tool:execute", ToolExecutePayload, onToolExecute));
@@ -123,12 +124,7 @@ async function handleDisconnect(io: Server, socket: Socket): Promise<void> {
     if (!room) return; // room no longer exists (e.g. process shutdown mid-test/dev-reset) - nothing to update
 
     await roomService.setPlayerConnected(db, roomId, playerId, false);
-
-    if (room.phase === "LOBBY" && room.hostPlayerId === playerId) {
-      const players = await playersRepo.findPlayersInRoom(db, roomId);
-      const nextHost = players.find((p) => p.id !== playerId && p.connected);
-      if (nextHost) await roomsRepo.setHostPlayer(db, roomId, nextHost.id);
-    }
+    await roomService.transferHostIfNeeded(db, roomId, playerId);
 
     const snapshot = await roomService.getRoomSnapshot(db, roomId);
     emitRoomSnapshot(io, roomId, snapshot);
@@ -144,6 +140,16 @@ const onPlayerReady: Handler<{ ready: boolean }> = async (io, socket, payload) =
   await roomService.setPlayerReady(db, roomId, playerId, payload.ready);
   const snapshot = await roomService.getRoomSnapshot(db, roomId);
   emitRoomSnapshot(io, roomId, snapshot);
+};
+
+const onPlayerLeave: Handler<Record<string, never>> = async (io, socket) => {
+  const { playerId, roomId } = socketData(socket);
+  await roomService.leaveRoom(db, roomId, playerId);
+  await socket.leave(roomRoom(roomId));
+  const snapshot = await roomService.getRoomSnapshot(db, roomId);
+  emitRoomSnapshot(io, roomId, snapshot);
+  // The client disconnects its own socket once it receives this ack - the server has already
+  // dropped the player row, so there's nothing further for this socket to be authorized to do.
 };
 
 const onGameStart: Handler<{ durationPreset?: "standard" | "demo" | "instant" }> = async (io, socket, payload) => {
@@ -239,11 +245,22 @@ const onEvidenceAttach: Handler<{ hypothesisId: string; evidenceId: string }> = 
   }
 };
 
-const onKnownFactAdd: Handler<{ text: string; sourceEvidenceId?: string | null }> = async (io, socket, payload) => {
+const onKnownFactAdd: Handler<{ text: string; category?: "fact" | "question"; sourceEvidenceId?: string | null }> = async (
+  io,
+  socket,
+  payload,
+) => {
   const { playerId, roomId } = socketData(socket);
   const room = await roomsRepo.findRoomById(db, roomId);
   if (!room?.currentGameId) throw new RaidError("INVALID_PHASE", "No active game");
-  const fact = await gameService.addKnownFact(db, room.currentGameId, playerId, payload.text, payload.sourceEvidenceId ?? null);
+  const fact = await gameService.addKnownFact(
+    db,
+    room.currentGameId,
+    playerId,
+    payload.text,
+    payload.category ?? "fact",
+    payload.sourceEvidenceId ?? null,
+  );
   emitGameEvent(io, roomId, { kind: "known_fact", fact });
 };
 

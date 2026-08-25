@@ -1,0 +1,1 @@
+ALTER TABLE "known_facts" ADD COLUMN "category" varchar(10) DEFAULT 'fact' NOT NULL;

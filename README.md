@@ -134,6 +134,7 @@ docker/              Local Postgres + production Dockerfiles
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System diagrams, domain boundaries, lifecycle/sequence diagrams |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | ADRs — every major technical choice, with evidence, not just theory |
 | [`docs/GAME_DESIGN.md`](docs/GAME_DESIGN.md) | Scenarios, roles, asymmetric information, scenario-quality checklist |
+| [`docs/PLAYTESTING.md`](docs/PLAYTESTING.md) | Human playtest rubric and V0.2 role-balance/pacing/asymmetry evaluation |
 | [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md) | Why AI, where, the validation loop, cost discipline |
 | [`docs/WEBSOCKET_PROTOCOL.md`](docs/WEBSOCKET_PROTOCOL.md) | Every event, payload, auth rule, broadcast scope |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | ER diagram, JSONB usage, concurrency constraints |

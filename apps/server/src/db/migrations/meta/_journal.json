@@ -22,6 +22,13 @@
       "when": 1787632493550,
       "tag": "0002_natural_invisible_woman",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787636876890,
+      "tag": "0003_tough_sabra",
+      "breakpoints": true
     }
   ]
 }

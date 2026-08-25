@@ -29,6 +29,7 @@ interface GameContextValue {
   myPlayerId: string | null;
   actions: {
     setReady: (ready: boolean) => Promise<void>;
+    leaveRoom: () => Promise<void>;
     startGame: (durationPreset?: "standard" | "demo") => Promise<{ gameId: string }>;
     sendChat: (text: string) => Promise<void>;
     executeTool: (toolId: string) => Promise<{ output: string; unlockedEvidenceIds: string[] }>;
@@ -36,7 +37,7 @@ interface GameContextValue {
     supportHypothesis: (hypothesisId: string) => Promise<void>;
     challengeHypothesis: (hypothesisId: string) => Promise<void>;
     attachEvidence: (hypothesisId: string, evidenceId: string) => Promise<void>;
-    addKnownFact: (text: string, sourceEvidenceId?: string | null) => Promise<void>;
+    addKnownFact: (text: string, category?: "fact" | "question", sourceEvidenceId?: string | null) => Promise<void>;
     submitFinal: (rootCause: string, supportingEvidenceIds: string[], remediation: string) => Promise<void>;
   };
 }
@@ -137,6 +138,11 @@ export function GameProvider({ roomCode, playerId, children }: { roomCode: strin
   const actions = useMemo<GameContextValue["actions"]>(
     () => ({
       setReady: (ready) => guarded(() => emitAck(socketRef.current!, "player:ready", { ready })),
+      leaveRoom: () =>
+        guarded(async () => {
+          await emitAck(socketRef.current!, "player:leave", {});
+          socketRef.current?.disconnect();
+        }),
       startGame: (durationPreset) => guarded(() => emitAck(socketRef.current!, "game:start", { durationPreset })),
       sendChat: (text) => guarded(() => emitAck(socketRef.current!, "chat:send", { text, clientMsgId: uuid() })),
       executeTool: (toolId) => guarded(() => emitAck(socketRef.current!, "tool:execute", { toolId })),
@@ -145,8 +151,10 @@ export function GameProvider({ roomCode, playerId, children }: { roomCode: strin
       challengeHypothesis: (hypothesisId) => guarded(() => emitAck(socketRef.current!, "hypothesis:challenge", { hypothesisId })),
       attachEvidence: (hypothesisId, evidenceId) =>
         guarded(() => emitAck(socketRef.current!, "evidence:attach", { hypothesisId, evidenceId })),
-      addKnownFact: (text, sourceEvidenceId) =>
-        guarded(() => emitAck(socketRef.current!, "knownfact:add", { text, sourceEvidenceId: sourceEvidenceId ?? null })),
+      addKnownFact: (text, category, sourceEvidenceId) =>
+        guarded(() =>
+          emitAck(socketRef.current!, "knownfact:add", { text, category: category ?? "fact", sourceEvidenceId: sourceEvidenceId ?? null }),
+        ),
       submitFinal: (rootCause, supportingEvidenceIds, remediation) =>
         guarded(() =>
           emitAck(socketRef.current!, "final:submit", { rootCause, supportingEvidenceIds, remediation, clientMsgId: uuid() }),

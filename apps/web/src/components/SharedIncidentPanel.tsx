@@ -1,7 +1,8 @@
 import { FormEvent, useState } from "react";
 import { useGame } from "../state/GameProvider.js";
 import { FinalSubmitForm } from "./FinalSubmitForm.js";
-import type { Hypothesis, HypothesisStatus } from "@raid/shared";
+import { TeamRoster } from "./TeamRoster.js";
+import type { Hypothesis, HypothesisStatus, KnowledgeBoardCategory } from "@raid/shared";
 
 const STATUS_STYLE: Record<HypothesisStatus, string> = {
   OPEN: "text-ink-400 border-ink-500 bg-ink-800",
@@ -17,12 +18,23 @@ export function SharedIncidentPanel() {
 
   // Mirrors the server's role-assignment rule (packages/game-engine roomService.assignRoles):
   // a 4-player game always includes an Incident Commander, who alone may submit the final
-  // diagnosis; a 3-player game has no IC, so any assigned player may submit. Individual
-  // players never learn teammates' roles, so this is inferred from player count, not roles.
+  // diagnosis; a 3-player game has no IC, so any assigned player may submit. Roles ARE visible
+  // to everyone once the game starts (RoomSnapshot.players[].role) - only evidence CONTENT is
+  // private - so the team always knows who to ask, even though this rule is inferred from
+  // player count rather than read off a specific teammate's role.
   const canSubmitFinal = gameSnapshot.myRole === "incident_commander" || (roomSnapshot?.players.length ?? 0) === 3;
+
+  const activeHypotheses = gameSnapshot.hypotheses.filter((h) => h.status !== "CONTRADICTED");
+  const ruledOut = gameSnapshot.hypotheses.filter((h) => h.status === "CONTRADICTED");
+  const facts = gameSnapshot.knownFacts.filter((f) => f.category !== "question");
+  const questions = gameSnapshot.knownFacts.filter((f) => f.category === "question");
 
   return (
     <div className="flex flex-col gap-5">
+      <Section title="Team">
+        <TeamRoster />
+      </Section>
+
       <Section title="Timeline">
         <div className="flex flex-col gap-1.5">
           {gameSnapshot.timeline.map((step, i) => (
@@ -35,12 +47,26 @@ export function SharedIncidentPanel() {
       </Section>
 
       <Section title="Known facts">
-        <KnownFactsList />
+        <NotesList notes={facts} category="fact" empty="No facts added yet. Share something you've found." />
       </Section>
 
-      <Section title={`Hypotheses (${gameSnapshot.hypotheses.length})`}>
-        <HypothesesBoard />
+      <Section title="Open questions">
+        <NotesList notes={questions} category="question" empty="No open questions yet. What don't you understand yet?" />
       </Section>
+
+      <Section title={`Active hypotheses (${activeHypotheses.length})`}>
+        <HypothesesBoard hypotheses={activeHypotheses} />
+      </Section>
+
+      {ruledOut.length > 0 && (
+        <Section title={`Ruled out (${ruledOut.length})`}>
+          <div className="flex flex-col gap-2">
+            {ruledOut.map((h) => (
+              <HypothesisCard key={h.id} hypothesis={h} />
+            ))}
+          </div>
+        </Section>
+      )}
 
       {canSubmitFinal && (
         <Section title="Final diagnosis">
@@ -60,18 +86,25 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function KnownFactsList() {
-  const { gameSnapshot, actions } = useGame();
+function NotesList({
+  notes,
+  category,
+  empty,
+}: {
+  notes: { id: string; text: string }[];
+  category: KnowledgeBoardCategory;
+  empty: string;
+}) {
+  const { actions } = useGame();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  if (!gameSnapshot) return null;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!text.trim()) return;
     setBusy(true);
     try {
-      await actions.addKnownFact(text.trim());
+      await actions.addKnownFact(text.trim(), category);
       setText("");
     } finally {
       setBusy(false);
@@ -80,10 +113,10 @@ function KnownFactsList() {
 
   return (
     <div className="flex flex-col gap-2">
-      {gameSnapshot.knownFacts.length === 0 && <div className="text-xs text-ink-500">No facts added yet.</div>}
-      {gameSnapshot.knownFacts.map((f) => (
+      {notes.length === 0 && <div className="text-xs text-ink-500">{empty}</div>}
+      {notes.map((f) => (
         <div key={f.id} className="text-xs text-ink-200 flex gap-1.5">
-          <span className="text-ok">&bull;</span>
+          <span className={category === "question" ? "text-accent" : "text-ok"}>{category === "question" ? "?" : "•"}</span>
           <span>{f.text}</span>
         </div>
       ))}
@@ -91,7 +124,7 @@ function KnownFactsList() {
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Add a fact for the team..."
+          placeholder={category === "question" ? "What's still unclear?" : "Add a fact for the team..."}
           maxLength={300}
           className="flex-1 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-xs outline-none focus:border-accent"
         />
@@ -103,11 +136,10 @@ function KnownFactsList() {
   );
 }
 
-function HypothesesBoard() {
-  const { gameSnapshot, myPlayerId, actions } = useGame();
+function HypothesesBoard({ hypotheses }: { hypotheses: Hypothesis[] }) {
+  const { actions } = useGame();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  if (!gameSnapshot) return null;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -123,12 +155,12 @@ function HypothesesBoard() {
 
   return (
     <div className="flex flex-col gap-2">
-      {gameSnapshot.hypotheses.length === 0 && <div className="text-xs text-ink-500">No hypotheses yet.</div>}
-      {gameSnapshot.hypotheses
+      {hypotheses.length === 0 && <div className="text-xs text-ink-500">No active hypotheses yet.</div>}
+      {hypotheses
         .slice()
         .reverse()
         .map((h) => (
-          <HypothesisCard key={h.id} hypothesis={h} myPlayerId={myPlayerId} onSupport={actions.supportHypothesis} onChallenge={actions.challengeHypothesis} />
+          <HypothesisCard key={h.id} hypothesis={h} />
         ))}
       <form onSubmit={submit} className="flex gap-1.5 mt-1">
         <input
@@ -146,17 +178,8 @@ function HypothesesBoard() {
   );
 }
 
-function HypothesisCard({
-  hypothesis,
-  myPlayerId,
-  onSupport,
-  onChallenge,
-}: {
-  hypothesis: Hypothesis;
-  myPlayerId: string | null;
-  onSupport: (id: string) => Promise<void>;
-  onChallenge: (id: string) => Promise<void>;
-}) {
+function HypothesisCard({ hypothesis }: { hypothesis: Hypothesis }) {
+  const { myPlayerId, actions } = useGame();
   const iSupported = myPlayerId ? hypothesis.supportedBy.includes(myPlayerId) : false;
   const iChallenged = myPlayerId ? hypothesis.challengedBy.includes(myPlayerId) : false;
 
@@ -171,14 +194,14 @@ function HypothesisCard({
       {hypothesis.aiRationale && <p className="text-[11px] text-ink-400 mt-1.5 italic">{hypothesis.aiRationale}</p>}
       <div className="flex items-center gap-3 mt-2">
         <button
-          onClick={() => onSupport(hypothesis.id)}
+          onClick={() => actions.supportHypothesis(hypothesis.id)}
           disabled={iSupported}
           className={`text-[11px] ${iSupported ? "text-ok" : "text-ink-400 hover:text-ok"}`}
         >
           &#9650; Support ({hypothesis.supportedBy.length})
         </button>
         <button
-          onClick={() => onChallenge(hypothesis.id)}
+          onClick={() => actions.challengeHypothesis(hypothesis.id)}
           disabled={iChallenged}
           className={`text-[11px] ${iChallenged ? "text-sev-1" : "text-ink-400 hover:text-sev-1"}`}
         >

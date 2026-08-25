@@ -61,6 +61,7 @@ export function toChatMessage(row: {
 export function toKnownFact(row: {
   id: string;
   text: string;
+  category: string;
   sourceEvidenceId: string | null;
   addedBy: string;
   createdAt: Date;
@@ -68,6 +69,7 @@ export function toKnownFact(row: {
   return {
     id: row.id,
     text: row.text,
+    category: row.category === "question" ? "question" : "fact",
     sourceEvidenceId: row.sourceEvidenceId,
     addedBy: row.addedBy,
     createdAt: row.createdAt.toISOString(),

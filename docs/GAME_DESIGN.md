@@ -53,7 +53,7 @@ ad-hoc phase checks scattered across handlers) is the single authority.
 | Backend Engineer | app logs, distributed traces, deployment history, endpoint stats, payment-dependency health | deployment diff, N+1 trace pattern, error logs, endpoint latency, a red-herring dependency check |
 | Database Engineer | connection pool monitor, query volume stats, slow-query log, lock monitor, replication status | pool saturation graph, query volume spike, three red-herring "nothing wrong here" results |
 | SRE / Infra | CPU/memory panel, pod health, request rate, network health, infra events feed | flat CPU/memory (key evidence), normal request rate (key evidence), three red herrings |
-| Incident Commander | none — coordinates via chat, the shared board, and submits the final diagnosis | sees the shared timeline/known-facts/hypotheses board, never raw role-specific evidence |
+| Incident Commander | service status board, customer impact feed (added V0.2) | a coarse cross-service health rollup and a customer-ticket trend — deliberately says *which* systems look unhealthy, never *why* |
 
 No role's tool list overlaps another's, and no evidence item is visible to more than one role
 (`EvidenceDefinition.visibleToRoles` is checked to be a strict partition by the automated scenario
@@ -63,6 +63,17 @@ snapshot, and a runtime check on `evidence:attach`/`knownfact:add` that rejects 
 the caller's role can't see — even if they somehow learned the id (see `docs/WEBSOCKET_PROTOCOL.md`
 "never trust the socket payload" and the privacy tests in
 `apps/server/src/__tests__/security.test.ts`).
+
+Roles themselves (as opposed to evidence content) are shared with the whole team once the game starts
+— every player's `RoomSnapshot.players[].role` is visible to everyone (V0.2), rendered as a team
+roster in the shared-incident panel. This mirrors how real incident response works (you know who to
+ask), and costs nothing in terms of the evidence-asymmetry design since no evidence content is exposed.
+
+**The Incident Commander was purely passive before V0.2** — zero tools, zero evidence, coordination
+and the final-submission button only. `docs/PLAYTESTING.md` records this as a real finding from the
+V0.2 role-balance review; the fix (two new IC-exclusive tools, evidence gated the same way as every
+other role's) is enforced going forward by an automated check (`evaluateScenarioQuality`'s "Incident
+Commander has at least one active tool") so a future scenario can't reintroduce a passive IC silently.
 
 ## The scenario: Checkout Degradation
 

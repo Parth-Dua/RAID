@@ -71,7 +71,7 @@ export async function findChatMessages(db: Database, gameId: string) {
 
 export async function insertKnownFact(
   db: Database,
-  params: { gameId: string; text: string; sourceEvidenceId: string | null; addedBy: string },
+  params: { gameId: string; text: string; category: "fact" | "question"; sourceEvidenceId: string | null; addedBy: string },
 ) {
   const [row] = await db.insert(knownFacts).values(params).returning();
   return row;

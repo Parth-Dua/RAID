@@ -231,6 +231,7 @@ export async function addKnownFact(
   gameId: string,
   playerId: string,
   text: string,
+  category: "fact" | "question",
   sourceEvidenceId: string | null,
 ): Promise<KnownFact> {
   const { roomRow, scenario } = await loadActiveGame(db, gameId);
@@ -247,7 +248,7 @@ export async function addKnownFact(
     if (!unlocked.has(sourceEvidenceId)) throw new RaidError("NOT_AUTHORIZED", "That evidence has not been unlocked yet");
   }
 
-  const row = await contentRepo.insertKnownFact(db, { gameId, text, sourceEvidenceId, addedBy: playerId });
+  const row = await contentRepo.insertKnownFact(db, { gameId, text, category, sourceEvidenceId, addedBy: playerId });
   if (!row) throw new RaidError("SERVER_ERROR", "Failed to add known fact");
   await appendEvent(db, { roomId: roomRow.id, gameId, type: "KNOWN_FACT_ADDED", payload: { factId: row.id }, actorPlayerId: playerId });
   return toKnownFact(row);

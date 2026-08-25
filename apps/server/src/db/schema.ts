@@ -172,6 +172,7 @@ export const knownFacts = pgTable("known_facts", {
     .notNull()
     .references(() => games.id, { onDelete: "cascade" }),
   text: text("text").notNull(),
+  category: varchar("category", { length: 10 }).notNull().default("fact"), // 'fact' | 'question'
   sourceEvidenceId: varchar("source_evidence_id", { length: 60 }),
   addedBy: uuid("added_by")
     .notNull()

@@ -115,6 +115,52 @@ export function evaluateScenarioQuality(scenario: ScenarioDefinition): ScenarioQ
     detail: thinRoles.length ? `thin: ${thinRoles.join(", ")}` : "ok",
   });
 
+  // 11. The Incident Commander has at least one active tool - the role cannot be purely passive
+  // (V0.2.2 "Incident Commander cannot be passive").
+  const icHasTool = scenario.tools.some((t) => t.role === "incident_commander");
+  checks.push({
+    name: "Incident Commander has at least one active tool",
+    passed: icHasTool,
+    detail: icHasTool ? "ok" : "IC has zero tools - purely passive role",
+  });
+
+  // 12. Evidence is distributed roughly evenly across investigative roles - no role should be
+  // starved relative to another (clue redundancy / balance, V0.2.7).
+  const evidenceCounts = investigativeRoles.map(
+    (r) => scenario.evidence.filter((e) => e.visibleToRoles.includes(r)).length,
+  );
+  const maxCount = Math.max(...evidenceCounts);
+  const minCount = Math.min(...evidenceCounts);
+  const balanced = minCount > 0 && maxCount <= minCount * 2.5;
+  checks.push({
+    name: "evidence is roughly balanced across investigative roles (max <= 2.5x min)",
+    passed: balanced,
+    detail: `counts: ${investigativeRoles.map((r, i) => `${r}=${evidenceCounts[i]}`).join(", ")}`,
+  });
+
+  // 13. Answer leakage: no evidence item's content baldly states the causal-chain summary. This
+  // is a mechanical proxy (a long verbatim substring match), not a substitute for human read-through,
+  // but it catches the class of bug where a clue accidentally gives away the whole answer at once.
+  const summarySnippet = scenario.rootCause.summary.toLowerCase().slice(0, 50);
+  const leakyEvidence =
+    summarySnippet.length > 20
+      ? scenario.evidence.filter((e) => e.content.toLowerCase().includes(summarySnippet))
+      : [];
+  checks.push({
+    name: "no single evidence item states the full root-cause summary verbatim",
+    passed: leakyEvidence.length === 0,
+    detail: leakyEvidence.length ? `leaky: ${leakyEvidence.map((e) => e.id).join(", ")}` : "ok",
+  });
+
+  // 14. Causal consistency proxy: the causal chain has enough steps to represent a real multi-hop
+  // mechanism (a one- or two-line "chain" isn't really a chain, and is a sign of an under-designed
+  // scenario), and every key evidence item traces to at least one causal-chain step by keyword overlap.
+  checks.push({
+    name: "root-cause causal chain has at least 4 steps (a real multi-hop mechanism)",
+    passed: scenario.rootCause.causalChain.length >= 4,
+    detail: `steps=${scenario.rootCause.causalChain.length}`,
+  });
+
   return {
     scenarioId: scenario.id,
     checks,

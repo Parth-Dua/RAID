@@ -11,6 +11,11 @@ import { z } from "zod";
 export const PlayerReadyPayload = z.object({ ready: z.boolean() });
 export type PlayerReadyPayload = z.infer<typeof PlayerReadyPayload>;
 
+/** Voluntary leave. Only legal in LOBBY - once a game is ACTIVE a player's role/evidence are
+ * bound into the game record and they can only disconnect, not remove themselves. */
+export const PlayerLeavePayload = z.object({});
+export type PlayerLeavePayload = z.infer<typeof PlayerLeavePayload>;
+
 export const GameStartPayload = z.object({
   // "instant" is intentionally undocumented in the web UI - see DURATION_PRESETS
   // in @raid/game-engine for why it exists (fast bot-simulation regression runs).
@@ -53,6 +58,7 @@ export type EvidenceAttachPayload = z.infer<typeof EvidenceAttachPayload>;
 
 export const KnownFactAddPayload = z.object({
   text: z.string().min(3).max(300),
+  category: z.enum(["fact", "question"]).optional(),
   sourceEvidenceId: z.string().max(100).nullable().optional(),
 });
 export type KnownFactAddPayload = z.infer<typeof KnownFactAddPayload>;
@@ -67,6 +73,7 @@ export type FinalSubmitPayload = z.infer<typeof FinalSubmitPayload>;
 
 export const ClientToServerEvents = {
   "player:ready": PlayerReadyPayload,
+  "player:leave": PlayerLeavePayload,
   "game:start": GameStartPayload,
   "chat:send": ChatSendPayload,
   "tool:execute": ToolExecutePayload,

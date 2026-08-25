@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useGame } from "../state/GameProvider.js";
+import { clearIdentity } from "../state/identity.js";
 
 export function LobbyView({ roomCode }: { roomCode: string }) {
   const { roomSnapshot, myPlayerId, actions } = useGame();
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [duration, setDuration] = useState<"standard" | "demo">("demo");
   const [copied, setCopied] = useState(false);
@@ -32,6 +35,17 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
     }
   }
 
+  async function leave() {
+    setBusy(true);
+    try {
+      await actions.leaveRoom();
+      clearIdentity();
+      navigate("/");
+    } catch {
+      setBusy(false);
+    }
+  }
+
   function copyInvite() {
     navigator.clipboard?.writeText(inviteUrl).then(() => {
       setCopied(true);
@@ -48,6 +62,12 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
           <button onClick={copyInvite} className="mt-2 text-xs text-accent hover:underline">
             {copied ? "Copied!" : "Copy invite link"}
           </button>
+        </div>
+
+        <div className="bg-ink-900 border border-ink-700 rounded-lg p-4 mb-5 text-xs text-ink-300 leading-relaxed">
+          Once the incident starts, each of you gets a <strong className="text-ink-100">different role</strong> with
+          private tools and evidence — nobody sees the whole picture alone. Investigate, share what you find on the
+          shared board, propose hypotheses, and submit a diagnosis before the clock runs out.
         </div>
 
         <div className="bg-ink-900 border border-ink-700 rounded-lg divide-y divide-ink-700">
@@ -104,6 +124,10 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
               </button>
             </div>
           )}
+
+          <button onClick={leave} disabled={busy} className="text-xs text-ink-500 hover:text-sev-1 transition-colors">
+            Leave room
+          </button>
         </div>
       </div>
     </div>

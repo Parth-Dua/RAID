@@ -140,6 +140,23 @@ const TOOLS: ToolDefinition[] = [
     description: "Cluster-level events: deploys, scaling actions, node events.",
     resultSummary: "Chronological infra event feed.",
   },
+  // Incident Commander
+  {
+    id: "service_status_board",
+    role: "incident_commander",
+    name: "Service Status Board",
+    description: "A coarse, cross-team health rollup: which services are degraded right now.",
+    resultSummary: "NOMINAL / DEGRADED per service. Says what's unhealthy, not why.",
+    baselineOutput: "checkout-service: NOMINAL  |  checkout_db: NOMINAL  |  infra: NOMINAL",
+  },
+  {
+    id: "customer_impact_feed",
+    role: "incident_commander",
+    name: "Customer Impact Feed",
+    description: "Support ticket volume and customer-reported checkout failures.",
+    resultSummary: "Ticket volume trend for checkout-related complaints.",
+    baselineOutput: "Checkout-related tickets: 2 in the last 15 min (baseline). No notable spike yet.",
+  },
 ];
 
 const EVIDENCE: FractionalEvidence[] = [
@@ -364,6 +381,38 @@ const EVIDENCE: FractionalEvidence[] = [
       "14:02:40  Autoscaler: no scaling action taken (CPU target not breached)\n" +
       "  A deploy happened right before symptoms began, but infra-level metrics alone don't show what changed in the code.",
     unlock: { toolId: "infra_events" },
+    isRedHerring: false,
+    isKeyEvidence: false,
+  },
+
+  // ---- Incident Commander ----
+  // Deliberately coarse: says WHICH systems look unhealthy, never WHY. Gives the IC an active
+  // tool to run and something concrete to cross-reference against what teammates report, without
+  // duplicating any investigative role's evidence or leaking the mechanism.
+  {
+    id: "ic_status_degraded",
+    visibleToRoles: ["incident_commander"],
+    title: "Service Status Board: checkout + database degraded",
+    category: "metric",
+    content:
+      "checkout-service: DEGRADED (elevated latency, error rate climbing)\n" +
+      "checkout_db: DEGRADED (elevated latency)\n" +
+      "infra: NOMINAL (no CPU/memory/scaling alerts)\n" +
+      "  Two services are unhealthy; the underlying infrastructure itself reports no issues.",
+    unlock: { toolId: "service_status_board", atFraction: 0.1 },
+    isRedHerring: false,
+    isKeyEvidence: false,
+  },
+  {
+    id: "ic_impact_rising",
+    visibleToRoles: ["incident_commander"],
+    title: "Customer impact rising",
+    category: "metric",
+    content:
+      "Checkout-related tickets: 34 in the last 15 min, up from a 2-ticket baseline.\n" +
+      "  Common complaint: \"payment page hangs, then fails.\" No reports of failed logins or\n" +
+      "  browsing issues elsewhere on the site.",
+    unlock: { toolId: "customer_impact_feed", atFraction: 0.4 },
     isRedHerring: false,
     isKeyEvidence: false,
   },

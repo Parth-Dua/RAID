@@ -160,9 +160,13 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export const KNOWLEDGE_BOARD_CATEGORIES = ["fact", "question"] as const;
+export type KnowledgeBoardCategory = (typeof KNOWLEDGE_BOARD_CATEGORIES)[number];
+
 export interface KnownFact {
   id: string;
   text: string;
+  category: KnowledgeBoardCategory;
   sourceEvidenceId: string | null;
   addedBy: string;
   createdAt: string;
