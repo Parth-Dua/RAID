@@ -1,0 +1,27 @@
+{
+  "name": "raid",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RAID - real-time multiplayer AI incident-response game",
+  "scripts": {
+    "build:packages": "pnpm --filter \"./packages/*\" run build",
+    "dev": "pnpm run build:packages && pnpm --parallel --filter ./apps/* run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "db:migrate": "pnpm --filter @raid/server run db:migrate",
+    "db:seed": "pnpm --filter @raid/server run db:seed",
+    "bots": "pnpm --filter @raid/server run bots"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

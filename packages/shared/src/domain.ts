@@ -1,0 +1,224 @@
+/**
+ * Core domain types shared between server and web client.
+ * These mirror (but are not identical to) the database schema — this file
+ * is the wire/domain representation, DB rows are mapped into these shapes.
+ */
+
+export const ROLES = [
+  "backend_engineer",
+  "database_engineer",
+  "sre",
+  "incident_commander",
+] as const;
+export type Role = (typeof ROLES)[number];
+
+export const GAME_PHASES = [
+  "LOBBY",
+  "STARTING",
+  "ACTIVE",
+  "FINALIZING",
+  "COMPLETED",
+  "ABANDONED",
+] as const;
+export type GamePhase = (typeof GAME_PHASES)[number];
+
+export const HYPOTHESIS_STATUS = [
+  "OPEN",
+  "SUPPORTED",
+  "PLAUSIBLE",
+  "WEAK",
+  "CONTRADICTED",
+] as const;
+export type HypothesisStatus = (typeof HYPOTHESIS_STATUS)[number];
+
+export interface PublicPlayer {
+  id: string;
+  displayName: string;
+  isHost: boolean;
+  ready: boolean;
+  connected: boolean;
+  role: Role | null;
+  joinedAt: string;
+}
+
+export interface RoomSnapshot {
+  roomId: string;
+  code: string;
+  phase: GamePhase;
+  players: PublicPlayer[];
+  gameId: string | null;
+  scenarioId: string | null;
+  createdAt: string;
+}
+
+export interface EvidenceUnlockCondition {
+  /** Evidence becomes available once this tool has been executed at least once. */
+  toolId?: string;
+  /** Evidence becomes available once the simulation clock passes this many seconds. */
+  atSeconds?: number;
+  /** If both toolId and atSeconds are set, both conditions must hold (AND). */
+}
+
+export interface EvidenceDefinition {
+  id: string;
+  /** Role(s) that can see this evidence once unlocked. */
+  visibleToRoles: Role[];
+  title: string;
+  category: "log" | "metric" | "trace" | "deployment" | "chat_note" | "incident_fact";
+  /** Rendered content shown to the player. May contain a small structured payload. */
+  content: string;
+  unlock: EvidenceUnlockCondition;
+  isRedHerring: boolean;
+  /** Not sent to clients; used for scoring key-evidence coverage. */
+  isKeyEvidence: boolean;
+}
+
+/** Evidence as delivered to a specific client: unlock metadata stripped, only what they're allowed to see. */
+export interface PublicEvidence {
+  id: string;
+  title: string;
+  category: EvidenceDefinition["category"];
+  content: string;
+  unlockedAtSeconds: number;
+  isRedHerring: boolean;
+}
+
+export interface ToolDefinition {
+  id: string;
+  role: Role;
+  name: string;
+  description: string;
+  /** Static result text shown every time (deterministic, cheap — no AI). */
+  resultSummary: string;
+  /** Shown when executed before any time-gated evidence for this tool has unlocked. */
+  baselineOutput?: string;
+}
+
+export interface TimelineStep {
+  atSeconds: number;
+  headline: string;
+  /** Optional metric deltas broadcast as part of the shared incident timeline. */
+  detail?: string;
+}
+
+export interface ScenarioRubricWeights {
+  rootCauseAccuracy: number;
+  evidenceQuality: number;
+  remediationQuality: number;
+  efficiency: number;
+  collaboration: number;
+}
+
+export interface ScenarioDefinition {
+  id: string;
+  title: string;
+  severity: "SEV-1" | "SEV-2" | "SEV-3";
+  briefing: string;
+  durationSeconds: number;
+  timeline: TimelineStep[];
+  tools: ToolDefinition[];
+  evidence: EvidenceDefinition[];
+  rootCause: {
+    summary: string;
+    causalChain: string[];
+    remediation: string;
+    keyEvidenceIds: string[];
+  };
+  plausibleWrongHypotheses: string[];
+  rubricWeights: ScenarioRubricWeights;
+}
+
+export interface ToolResult {
+  toolId: string;
+  executedAtSeconds: number;
+  output: string;
+  unlockedEvidenceIds: string[];
+}
+
+export interface Hypothesis {
+  id: string;
+  gameId: string;
+  authorId: string;
+  authorName: string;
+  text: string;
+  status: HypothesisStatus;
+  aiRationale: string | null;
+  supportedBy: string[];
+  challengedBy: string[];
+  evidenceIds: string[];
+  createdAt: string;
+  version: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  gameId: string;
+  authorId: string | null;
+  authorName: string;
+  text: string;
+  kind: "player" | "system";
+  createdAt: string;
+}
+
+export interface KnownFact {
+  id: string;
+  text: string;
+  sourceEvidenceId: string | null;
+  addedBy: string;
+  createdAt: string;
+}
+
+export interface FinalSubmissionInput {
+  rootCause: string;
+  supportingEvidenceIds: string[];
+  remediation: string;
+}
+
+export interface ScoreBreakdown {
+  rootCauseAccuracy: number;
+  evidenceQuality: number;
+  remediationQuality: number;
+  efficiency: number;
+  collaboration: number;
+  total: number;
+}
+
+export interface Debrief {
+  score: ScoreBreakdown;
+  rootCauseSummary: string;
+  expectedRemediation: string;
+  timeline: TimelineStep[];
+  keyEvidenceFound: string[];
+  keyEvidenceMissed: string[];
+  redHerringsEncountered: string[];
+  hypothesesConsidered: { text: string; status: HypothesisStatus }[];
+  collaborationNote: string;
+  coachingNotes: string[];
+}
+
+export type GameEventBroadcast =
+  | { kind: "chat"; message: ChatMessage }
+  | { kind: "known_fact"; fact: KnownFact }
+  | { kind: "timeline_step"; step: TimelineStep };
+
+export interface GameSnapshot {
+  gameId: string;
+  roomId: string;
+  scenarioId: string;
+  phase: GamePhase;
+  serverNowMs: number;
+  startedAtMs: number | null;
+  endsAtMs: number | null;
+  simulationSeconds: number;
+  myRole: Role | null;
+  briefing: string;
+  severity: ScenarioDefinition["severity"];
+  timeline: TimelineStep[];
+  tools: ToolDefinition[];
+  evidence: PublicEvidence[];
+  knownFacts: KnownFact[];
+  hypotheses: Hypothesis[];
+  chat: ChatMessage[];
+  version: number;
+  debrief: Debrief | null;
+}

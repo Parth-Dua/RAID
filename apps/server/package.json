@@ -1,0 +1,46 @@
+{
+  "name": "@raid/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "echo 'no-op'",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts",
+    "bots": "tsx src/scripts/botSimulation.ts"
+  },
+  "dependencies": {
+    "@raid/shared": "workspace:*",
+    "@raid/game-engine": "workspace:*",
+    "@raid/ai": "workspace:*",
+    "express": "^4.21.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "drizzle-orm": "^0.36.4",
+    "postgres": "^3.4.5",
+    "zod": "^3.23.8",
+    "dotenv": "^16.4.5",
+    "cookie": "^0.7.2",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "cors": "^2.8.5",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/cookie": "^0.6.0",
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.4",
+    "drizzle-kit": "^0.28.1"
+  }
+}

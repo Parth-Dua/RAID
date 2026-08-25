@@ -1,0 +1,37 @@
+# Production image for @raid/server. Build from the repo root:
+#   docker build -f docker/Dockerfile.server -t raid-server .
+FROM node:22-slim AS base
+RUN corepack enable
+WORKDIR /repo
+
+FROM base AS deps
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/game-engine/package.json packages/game-engine/package.json
+COPY packages/ai/package.json packages/ai/package.json
+COPY apps/server/package.json apps/server/package.json
+RUN pnpm install --frozen-lockfile --filter @raid/server...
+
+FROM deps AS build
+COPY packages/shared packages/shared
+COPY packages/game-engine packages/game-engine
+COPY packages/ai packages/ai
+COPY apps/server apps/server
+COPY tsconfig.base.json tsconfig.base.json
+# Workspace packages ship compiled dist/ (see their package.json "main") - must build before the
+# server, which imports them as plain Node ESM at runtime, not via ts-node/tsx.
+RUN pnpm --filter "./packages/*" run build && pnpm --filter @raid/server run build
+
+FROM base AS runtime
+ENV NODE_ENV=production
+WORKDIR /repo
+COPY --from=build /repo/node_modules ./node_modules
+COPY --from=build /repo/packages ./packages
+COPY --from=build /repo/apps/server/node_modules ./apps/server/node_modules
+COPY --from=build /repo/apps/server/dist ./apps/server/dist
+COPY --from=build /repo/apps/server/src/db/migrations ./apps/server/src/db/migrations
+COPY --from=build /repo/apps/server/package.json ./apps/server/package.json
+
+EXPOSE 4000
+WORKDIR /repo/apps/server
+CMD ["node", "dist/main.js"]

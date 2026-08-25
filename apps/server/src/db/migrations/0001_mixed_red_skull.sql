@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS "hypotheses_dedup_uq" ON "hypotheses" USING btree ("game_id","client_msg_id");
