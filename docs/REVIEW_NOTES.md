@@ -1,5 +1,17 @@
 # Review Notes
 
+## README productionization (post-V0.1)
+
+**Finding: the documented single-command `pnpm dev` had never actually been run as one command.**
+Every prior verification started `tsx` and `vite` independently in separate background processes,
+which worked and masked a real bug: root `package.json`'s `dev` script had an unquoted
+`--filter ./apps/*`, which the shell glob-expanded into two literal arguments
+(`./apps/server ./apps/web`) before pnpm ever received a single filter pattern - `pnpm dev` failed
+outright with `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT`. The adjacent `build:packages` script quoted its
+equivalent pattern correctly; `dev` did not. **Fix**: quoted the filter pattern. Re-verified with a
+fresh `pnpm dev` run: both server and web health-checked successfully. A reminder that "the pieces
+work" and "the documented command works" are different claims requiring different evidence.
+
 Findings from the self-review passes and adversarial review, run after the first fully working
 implementation. This file records what was actually found and changed — not a restatement of the
 architecture, and not a log of every trivial fix. See `docs/DECISIONS.md` for the ADRs some of these

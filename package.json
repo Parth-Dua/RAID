@@ -5,7 +5,7 @@
   "description": "RAID - real-time multiplayer AI incident-response game",
   "scripts": {
     "build:packages": "pnpm --filter \"./packages/*\" run build",
-    "dev": "pnpm run build:packages && pnpm --parallel --filter ./apps/* run dev",
+    "dev": "pnpm run build:packages && pnpm --parallel --filter \"./apps/*\" run dev",
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",
