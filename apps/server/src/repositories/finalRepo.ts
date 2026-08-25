@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { finalSubmissions, gameResults } from "../db/schema.js";
 
@@ -57,4 +57,11 @@ export async function insertGameResult(
 export async function findGameResultByGame(db: Database, gameId: string): Promise<GameResultRow | undefined> {
   const [row] = await db.select().from(gameResults).where(eq(gameResults.gameId, gameId)).limit(1);
   return row;
+}
+
+/** V0.6.5: every completed-game result among a set of game ids - used to build a room's leaderboard
+ * (some games in the room may never have finished, so this can return fewer rows than gameIds). */
+export async function findGameResultsByGameIds(db: Database, gameIds: string[]): Promise<GameResultRow[]> {
+  if (gameIds.length === 0) return [];
+  return db.select().from(gameResults).where(inArray(gameResults.gameId, gameIds));
 }

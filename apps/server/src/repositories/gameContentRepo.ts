@@ -30,6 +30,29 @@ export async function findExecutedToolIds(db: Database, gameId: string): Promise
   return new Set(rows.map((r) => r.toolId));
 }
 
+/** V0.6.1: every evidence-unlock row (not just the distinct evidence id set
+ * `findUnlockedEvidenceIds` returns) - used to compute each player's real per-role evidence
+ * contribution for the debrief. */
+export async function findUnlockedEvidenceRows(
+  db: Database,
+  gameId: string,
+): Promise<{ evidenceId: string; unlockedByPlayerId: string | null; unlockedAtSeconds: number }[]> {
+  return db
+    .select({
+      evidenceId: gameEvidence.evidenceId,
+      unlockedByPlayerId: gameEvidence.unlockedByPlayerId,
+      unlockedAtSeconds: gameEvidence.unlockedAtSeconds,
+    })
+    .from(gameEvidence)
+    .where(eq(gameEvidence.gameId, gameId));
+}
+
+/** V0.6.1: every tool-execution row (not just distinct executors) - used to compute each player's
+ * real tool-usage count for the debrief's role-contribution breakdown. */
+export async function findToolActionsForGame(db: Database, gameId: string): Promise<{ playerId: string; toolId: string }[]> {
+  return db.select({ playerId: toolActions.playerId, toolId: toolActions.toolId }).from(toolActions).where(eq(toolActions.gameId, gameId));
+}
+
 export async function insertToolAction(
   db: Database,
   params: { gameId: string; playerId: string; toolId: string; executedAtSeconds: number; output: string },

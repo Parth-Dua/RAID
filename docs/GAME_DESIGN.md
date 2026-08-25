@@ -265,14 +265,36 @@ duration picker — see `docs/TESTING.md`. HARD difficulty pushes time-gated unl
 whichever duration is chosen (see "Difficulty" above) rather than changing the clock itself, so the
 same duration preset means different effective pacing pressure depending on difficulty.
 
-## Replayability (V0.3.5)
+## Replayability (V0.3.5, extended V0.6.3)
 
-A completed room can rematch in place: the host clicks "Play again with this group," which resets the
-room to LOBBY (same room code, same players, no new invite/join round required), lets the host pick a
-new scenario and/or difficulty, and re-randomizes roles the same way a fresh game start always does.
-No accounts or persistent history are involved — see ADR-021 in `docs/DECISIONS.md` for the state
-machine change and how stale in-flight actions from the previous round are guaranteed not to leak into
-the new one.
+A completed room can rematch in place: the debrief screen's **Play again** button resets the room to
+LOBBY (same room code, same players, no new invite/join round required) and pre-fills the lobby's
+scenario/difficulty/duration picker with whatever was played last (from this browser's `localStorage`
+— see ADR-021/ADR-025 area of `docs/DECISIONS.md`), so the host doesn't have to reconfigure from
+scratch. **New scenario** does the same rematch but deliberately steers the picker to a different
+scenario than the one just finished. Roles are always freshly (re-)randomized on every `game:start` —
+this was true since V0.1 and V0.6 didn't add a toggle for it, since a toggle would imply it was ever
+optional. Rematch still requires every player to consciously re-ready before the next round starts
+(the server resets everyone's ready flag on rematch) — V0.6 removed the *reconfiguration* friction,
+not the *everyone agrees to play again* step, which is a real multiplayer-correctness safeguard, not
+busywork. No accounts or cross-device history are involved — see ADR-021 in `docs/DECISIONS.md` for
+the state machine change and how stale in-flight actions from the previous round are guaranteed not to
+leak into the new one.
+
+## Debrief, session stats, and sharing (V0.6)
+
+The post-game debrief (V0.1, upgraded V0.6.1) now states plainly which scenario/difficulty was played,
+how long it took, and — per player — how many tools they ran, how much evidence they personally
+unlocked, how many hypotheses they proposed, and how many known facts they added, all computed from
+the game's actual recorded actions rather than estimated. A **room-scoped leaderboard** (V0.6.5,
+optional per the original spec, built because it stayed simple) shows every completed game played in
+that room; it's deliberately not global, since with no accounts a cross-room ranking couldn't
+distinguish two different real people who happened to type the same display name (ADR-026). A
+**session-stats** panel (V0.6.2) on the landing page shows one browser's own running tally (games
+completed, average score, fastest diagnosis, roles played) with an explicit disclaimer that it is not
+a validated skill rating — `localStorage`-only, gone if the browser data is cleared. A **shareable
+result link** (V0.6.4, `/result/:gameId`) lets a team show a finished game's real result to someone
+outside the room, with no invented percentile or ranking anywhere on that page (ADR-025).
 
 ## Known design limitations
 
@@ -287,3 +309,9 @@ the new one.
   of red herrings or the causal-chain length between NORMAL and HARD for the same scenario — see
   ADR-020's "what would make us reconsider" for when that would warrant a richer transform (or a
   distinct scenario) instead.
+- Session stats (V0.6.2) and the "last played" rematch hint (V0.6.3) live in one browser's
+  `localStorage`/`sessionStorage` — they don't follow a player across devices or survive cleared site
+  data, and are explicitly not a substitute for accounts. The shareable-result and room-leaderboard
+  endpoints (V0.6.4/V0.6.5) are unauthenticated, gated only by an unguessable gameId or the room's own
+  invite code — acceptable at this MVP's accounts-free scope (see ADR-025/ADR-026) but worth revisiting
+  before a public deployment, same caveat already noted for V0.5's scenario-generation endpoints.

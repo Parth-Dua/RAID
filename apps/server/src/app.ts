@@ -4,6 +4,7 @@ import { env } from "./env.js";
 import { roomsRouter } from "./routes/rooms.js";
 import { healthRouter } from "./routes/health.js";
 import { scenariosRouter } from "./routes/scenarios.js";
+import { gamesRouter } from "./routes/games.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 export function createApp() {
@@ -23,6 +24,7 @@ export function createApp() {
   app.use("/api/health", healthRouter);
   app.use("/api/rooms", roomsRouter);
   app.use("/api/scenarios", scenariosRouter);
+  app.use("/api/games", gamesRouter);
 
   app.use(errorHandler);
   return app;

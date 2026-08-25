@@ -1,4 +1,4 @@
-import type { Difficulty, GeneratedScenarioDefinition, RoomSnapshot, ScenarioCatalogEntry } from "@raid/shared";
+import type { Difficulty, GeneratedScenarioDefinition, LeaderboardEntry, PublicGameResult, RoomSnapshot, ScenarioCatalogEntry } from "@raid/shared";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:4000";
 
@@ -67,6 +67,16 @@ export function saveGeneratedScenario(candidate: GeneratedScenarioDefinition, re
     method: "POST",
     body: JSON.stringify({ candidate, requestedDescription }),
   });
+}
+
+/** V0.6.4: public, read-only result lookup for the shareable /result/:gameId page. */
+export function getGameResult(gameId: string) {
+  return request<PublicGameResult>(`/api/games/${gameId}/result`);
+}
+
+/** V0.6.5: room-scoped leaderboard of real completed games. */
+export function getRoomLeaderboard(roomCode: string) {
+  return request<{ entries: LeaderboardEntry[] }>(`/api/rooms/${roomCode}/leaderboard`);
 }
 
 export { SERVER_URL };

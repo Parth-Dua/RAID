@@ -311,8 +311,27 @@ export interface ScoreBreakdown {
   total: number;
 }
 
+/** V0.6.1: what one player actually did in the game, computed from real recorded actions
+ * (tool_actions, game_evidence, hypotheses, known_facts) — never estimated or fabricated. */
+export interface RoleContribution {
+  playerId: string;
+  displayName: string;
+  role: Role;
+  toolsExecuted: number;
+  evidenceUnlocked: number;
+  hypothesesProposed: number;
+  knownFactsAdded: number;
+}
+
 export interface Debrief {
   score: ScoreBreakdown;
+  /** V0.6.1: which scenario/difficulty this was and how long it took - all real recorded facts
+   * about the game, not just the grading outcome. */
+  scenarioId: string;
+  scenarioTitle: string;
+  severity: ScenarioDefinition["severity"];
+  difficulty: Difficulty;
+  completionSeconds: number;
   rootCauseSummary: string;
   expectedRemediation: string;
   timeline: TimelineStep[];
@@ -322,6 +341,7 @@ export interface Debrief {
   hypothesesConsidered: { text: string; status: HypothesisStatus }[];
   collaborationNote: string;
   coachingNotes: string[];
+  roleContributions: RoleContribution[];
 }
 
 export type GameEventBroadcast =
@@ -350,4 +370,24 @@ export interface GameSnapshot {
   chat: ChatMessage[];
   version: number;
   debrief: Debrief | null;
+}
+
+/** V0.6.4: what a public, read-only /result/:gameId page renders. Wraps the same real Debrief
+ * every player already sees - no new derived statistics, no invented percentiles. */
+export interface PublicGameResult {
+  gameId: string;
+  completedAt: string;
+  debrief: Debrief;
+}
+
+/** V0.6.5: one row of a room-scoped leaderboard, built entirely from real persisted game_results
+ * for games played in that room - never a global/cross-room ranking, since there are no accounts
+ * to make a global ranking honest. */
+export interface LeaderboardEntry {
+  gameId: string;
+  scenarioTitle: string;
+  difficulty: Difficulty;
+  total: number;
+  completedAt: string;
+  players: { displayName: string; role: Role }[];
 }

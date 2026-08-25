@@ -173,10 +173,14 @@ constraint — JSONB is used in exactly four places, each for a specific reason:
    there is nothing to foreign-key against, and the list's only consumers are "iterate it" and "check
    membership," which a `jsonb` array serves fine without a join table.
 3. **`game_results.debrief`** — the fully rendered `Debrief` object (score breakdown, coaching notes,
-   timeline snapshot, evidence titles). This is a display-only composite assembled once at
-   finalization time; nothing ever queries into a specific field of a stored debrief, it's read back
-   whole for the debrief screen. A join table across half a dozen sub-shapes would add migration
-   surface for zero query benefit.
+   timeline snapshot, evidence titles, and, since V0.6.1, per-player role contributions). This is a
+   display-only composite assembled once at finalization time; nothing ever queries *into* a specific
+   field of a stored debrief at the SQL level (no `jsonb` path operators anywhere in this codebase) —
+   it's always read back as a whole row. V0.6.5's room leaderboard is a consumer that deserializes a
+   handful of these whole rows and picks fields (`scenarioTitle`, `difficulty`) in application code to
+   build a summary list; that's still "read back whole," just read back several times for one request
+   instead of once. A join table across half a dozen sub-shapes would add migration surface for zero
+   query benefit.
 4. **`generated_scenarios.definition`** (V0.5) — the full `GeneratedScenarioDefinition` (tools,
    evidence, timeline, root cause, scoring hints). This is structurally the same shape a hand-authored
    scenario module in `packages/game-engine/src/scenarios/` returns, just persisted instead of code -

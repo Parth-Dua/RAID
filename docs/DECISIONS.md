@@ -603,3 +603,54 @@ duration-specific content (not just differently-scaled timing of the same conten
 model and require the AI to generate per-duration variants — not currently needed, since every
 built-in scenario's design already treats duration as a pacing dial on one fixed set of content,
 and generated scenarios were designed to match that same assumption.
+
+## ADR-025: Shareable results are public by unguessable gameId, not a new auth layer
+
+**Context**: V0.6.4 wants a link a team can paste outside the room (Slack, a chat, an email) that
+shows a finished game's real result. The room itself is protected by an httpOnly session cookie
+scoped to that room, which is exactly wrong for this: a shareable link has to work for someone who
+was never a player in the room and has no cookie at all.
+
+**Chosen approach**: `GET /api/games/:gameId/result` and the `/result/:gameId` frontend route require
+no session, no cookie, and no room membership check. The only access control is `gameId` itself — a
+server-generated UUID (122 bits of randomness), functionally a bearer capability. The endpoint 404s
+for any game that doesn't exist or hasn't been finalized yet (`resultsService.getPublicGameResult`
+returns `null` for both cases) rather than ever returning a partial or fabricated payload. Same
+posture for `GET /api/rooms/:code/leaderboard`, gated by the room code — already the room's own
+invite mechanism, not a new secret.
+
+**Why**: introducing real authentication (accounts, magic links, per-share tokens with expiry) for a
+single-purpose "show a finished game to someone outside the room" feature would be a large amount of
+new surface area for a project with zero other accounts anywhere. An unguessable UUID is exactly the
+access-control model this MVP already uses everywhere else that isn't cookie-gated (room codes for
+joining, generated-scenario ids for `POST /api/scenarios/save` — see the V0.5 "known limitations"
+entry making the identical tradeoff for those routes).
+
+**What would make us reconsider**: a public deployment where leaked/scraped gameIds mattered — e.g.
+if a debrief ever contained something sensitive beyond incident-postmortem content (it doesn't: no
+PII, no raw evidence content beyond what the whole team already saw, just scores/titles/role names).
+At that point this would need real expiring share tokens instead of the raw gameId.
+
+## ADR-026: The leaderboard is room-scoped, not global, and stats are client-local, not account-backed
+
+**Context**: V0.6.2 (session stats) and V0.6.5 (leaderboard) both want to show "how did we do," but
+RAID has no accounts (ADR-016: an anonymous, room-scoped session token, not an identity). Any ranking
+or stat that implies comparability across people who are actually unrelated browsers/devices would be
+dishonest — a "global leaderboard" with no accounts is really just "whichever browser's localStorage
+happened to write a display name last," and different real people can share a display name with no
+way to tell them apart.
+
+**Chosen approach**: the leaderboard (`getRoomLeaderboard`) is scoped to one room's `games` history —
+comparing players who were, by construction, in the same room together at the same time, which is the
+one grouping this data model can actually vouch for. Session stats (`sessionStats.ts`) are scoped to
+one browser's `localStorage` and explicitly labeled "not a validated skill rating, no accounts
+involved" everywhere they're shown, rather than presented as a profile.
+
+**Why**: this is the same principle V0.4/V0.5 already applied to AI output — never present something
+as more certain or more comparable than the underlying data supports. A cross-room or cross-device
+ranking would look more like a real feature and be strictly less honest than what shipped.
+
+**What would make us reconsider**: adding real accounts would change what's vouchable — a global,
+account-backed leaderboard would become honest to build at that point, and should replace (not sit
+alongside) the room-scoped one to avoid two different, inconsistent notions of "ranking" existing at
+once.

@@ -5,22 +5,37 @@ import { useGame } from "../state/GameProvider.js";
 import { clearIdentity } from "../state/identity.js";
 import { getScenarioCatalog } from "../api/http.js";
 import { ScenarioGeneratorPanel } from "../components/ScenarioGeneratorPanel.js";
+import { LeaderboardPanel } from "../components/LeaderboardPanel.js";
+import { consumeForceDifferentScenario, loadLastPlayed, saveLastPlayed } from "../lib/lastPlayed.js";
 
 export function LobbyView({ roomCode }: { roomCode: string }) {
   const { roomSnapshot, myPlayerId, actions } = useGame();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
-  const [duration, setDuration] = useState<"standard" | "demo">("demo");
+  const [duration, setDuration] = useState<"standard" | "demo">(() => loadLastPlayed()?.duration ?? "demo");
   const [copied, setCopied] = useState(false);
   const [scenarios, setScenarios] = useState<ScenarioCatalogEntry[]>([]);
   const [scenarioId, setScenarioId] = useState<string>("");
-  const [difficulty, setDifficulty] = useState<Difficulty>("NORMAL");
+  const [difficulty, setDifficulty] = useState<Difficulty>(() => loadLastPlayed()?.difficulty ?? "NORMAL");
 
   useEffect(() => {
     getScenarioCatalog()
       .then(({ scenarios: list }) => {
         setScenarios(list);
-        setScenarioId((prev) => prev || list[0]?.id || "");
+        // "New scenario" (from the debrief screen) asks us to deliberately avoid repeating the
+        // scenario that just finished; otherwise fall back to the last-played scenario (V0.6.3
+        // low-friction rematch) or just the catalog's first entry.
+        const avoidId = consumeForceDifferentScenario();
+        const lastScenarioId = loadLastPlayed()?.scenarioId;
+        setScenarioId((prev) => {
+          if (prev) return prev;
+          if (avoidId && list.length > 1) {
+            const idx = list.findIndex((s) => s.id === avoidId);
+            return list[(idx + 1) % list.length]?.id ?? list[0]?.id ?? "";
+          }
+          if (lastScenarioId && list.some((s) => s.id === lastScenarioId)) return lastScenarioId;
+          return list[0]?.id || "";
+        });
       })
       .catch(() => {
         // Non-fatal: the host-only picker just stays empty and startGame falls back to the
@@ -48,6 +63,7 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
     setBusy(true);
     try {
       await actions.startGame(duration, scenarioId || undefined, difficulty);
+      if (scenarioId) saveLastPlayed({ scenarioId, difficulty, duration });
     } finally {
       setBusy(false);
     }
@@ -186,6 +202,8 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
           <button onClick={leave} disabled={busy} className="text-xs text-ink-500 hover:text-sev-1 transition-colors">
             Leave room
           </button>
+
+          <LeaderboardPanel roomCode={roomCode} />
         </div>
       </div>
     </div>

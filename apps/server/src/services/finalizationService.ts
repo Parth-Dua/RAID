@@ -1,8 +1,9 @@
 import { assembleFinalScore, assertTransition, computeCollaborationScore, computeEfficiencyScore } from "@raid/game-engine";
-import type { Debrief, FinalSubmissionInput, ScenarioDefinition } from "@raid/shared";
+import type { Debrief, FinalSubmissionInput, Role, RoleContribution, ScenarioDefinition } from "@raid/shared";
 import type { Database } from "../db/client.js";
 import { RaidError } from "../domain/errors.js";
 import * as roomsRepo from "../repositories/roomsRepo.js";
+import * as playersRepo from "../repositories/playersRepo.js";
 import * as gamesRepo from "../repositories/gamesRepo.js";
 import * as contentRepo from "../repositories/gameContentRepo.js";
 import * as hypothesesRepo from "../repositories/hypothesesRepo.js";
@@ -86,7 +87,7 @@ export async function finalizeGame(
     }
   }
 
-  const debrief = await evaluateAndBuildDebrief(db, gameId, scenario, elapsedSeconds, submission?.input ?? null);
+  const debrief = await evaluateAndBuildDebrief(db, gameId, roomRow.id, scenario, elapsedSeconds, submission?.input ?? null);
 
   await finalRepo.insertGameResult(db, {
     gameId,
@@ -109,6 +110,7 @@ export async function finalizeGame(
 async function evaluateAndBuildDebrief(
   db: Database,
   gameId: string,
+  roomId: string,
   scenario: ScenarioDefinition,
   elapsedSeconds: number,
   input: FinalSubmissionInput | null,
@@ -192,8 +194,15 @@ async function evaluateAndBuildDebrief(
     elapsedSeconds,
   });
 
+  const roleContributions = await buildRoleContributions(db, roomId, gameId, gamePlayers, hypothesesRows, knownFacts);
+
   return {
     score,
+    scenarioId: scenario.id,
+    scenarioTitle: scenario.title,
+    severity: scenario.severity,
+    difficulty: scenario.difficulty,
+    completionSeconds: elapsedSeconds,
     rootCauseSummary: scenario.rootCause.summary,
     expectedRemediation: scenario.rootCause.remediation,
     timeline: scenario.timeline,
@@ -203,7 +212,49 @@ async function evaluateAndBuildDebrief(
     hypothesesConsidered: hypothesesRows.map((h) => ({ text: h.text, status: h.status as Debrief["hypothesesConsidered"][number]["status"] })),
     collaborationNote: debriefContent.collaborationNote,
     coachingNotes: debriefContent.coachingNotes,
+    roleContributions,
   };
+}
+
+/** V0.6.1: real per-player contribution counts, computed entirely from recorded actions
+ * (tool_actions, game_evidence, hypotheses, known_facts) - never estimated. */
+async function buildRoleContributions(
+  db: Database,
+  roomId: string,
+  gameId: string,
+  gamePlayers: { playerId: string; role: string }[],
+  hypothesesRows: { authorId: string }[],
+  knownFactRows: { addedBy: string }[],
+): Promise<RoleContribution[]> {
+  const playersInRoom = await playersRepo.findPlayersInRoom(db, roomId);
+  const nameById = new Map(playersInRoom.map((p) => [p.id, p.displayName]));
+
+  const toolActionRows = await contentRepo.findToolActionsForGame(db, gameId);
+  const toolCountByPlayer = new Map<string, number>();
+  for (const row of toolActionRows) toolCountByPlayer.set(row.playerId, (toolCountByPlayer.get(row.playerId) ?? 0) + 1);
+
+  const evidenceRows = await contentRepo.findUnlockedEvidenceRows(db, gameId);
+  const evidenceCountByPlayer = new Map<string, number>();
+  for (const row of evidenceRows) {
+    if (!row.unlockedByPlayerId) continue;
+    evidenceCountByPlayer.set(row.unlockedByPlayerId, (evidenceCountByPlayer.get(row.unlockedByPlayerId) ?? 0) + 1);
+  }
+
+  const hypothesisCountByPlayer = new Map<string, number>();
+  for (const h of hypothesesRows) hypothesisCountByPlayer.set(h.authorId, (hypothesisCountByPlayer.get(h.authorId) ?? 0) + 1);
+
+  const factCountByPlayer = new Map<string, number>();
+  for (const f of knownFactRows) factCountByPlayer.set(f.addedBy, (factCountByPlayer.get(f.addedBy) ?? 0) + 1);
+
+  return gamePlayers.map((gp) => ({
+    playerId: gp.playerId,
+    displayName: nameById.get(gp.playerId) ?? "Unknown",
+    role: gp.role as Role,
+    toolsExecuted: toolCountByPlayer.get(gp.playerId) ?? 0,
+    evidenceUnlocked: evidenceCountByPlayer.get(gp.playerId) ?? 0,
+    hypothesesProposed: hypothesisCountByPlayer.get(gp.playerId) ?? 0,
+    knownFactsAdded: factCountByPlayer.get(gp.playerId) ?? 0,
+  }));
 }
 
 function assembleClampable(fn: () => number): number {

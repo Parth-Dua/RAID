@@ -20,13 +20,13 @@ cd packages/ai && pnpm exec vitest run
 
 # apps/server - REST, concurrency races, security/privacy, full game flow + reconnect + auto-finalize,
 # scenario selection + rematch (V0.3), adaptive Game Master orchestration (V0.4), scenario
-# generation/save/play (V0.5)
+# generation/save/play (V0.5), debrief upgrade + shareable results + leaderboard (V0.6)
 cd apps/server && NODE_ENV=test pnpm exec vitest run
-# 9 files, 67/67 tests passed (one file takes ~65s: it genuinely waits out a real 60s
+# 10 files, 75/75 tests passed (one file takes ~65s: it genuinely waits out a real 60s
 # "instant"-preset timer to prove auto-finalization fires without a submission)
 ```
 
-212 tests total across the monorepo, all green as of the last full run (V0.5) — see
+220 tests total across the monorepo, all green as of the last full run (V0.6) — see
 `docs/REVIEW_NOTES.md` for the handful of real bugs these caught and fixed along the way (several of
 the original concurrency/security tests failed on their first run for genuine reasons, not test bugs),
 and each phase's entry in `docs/MILESTONES.md` for what was added and why per phase.
@@ -96,6 +96,15 @@ attempt succeeds).
   same real-socket flow every built-in scenario is tested through, proving a generated scenario is
   genuinely indistinguishable from a built-in one once saved. Also confirms starting a game with a
   scenario id that was never generated or saved is still rejected with `INVALID_PAYLOAD`.
+- `v0.6.test.ts` (V0.6) — a completed game's debrief carries real `scenarioId`/`scenarioTitle`/
+  `severity`/`difficulty`/`completionSeconds`, and `roleContributions` reflects real per-player
+  tool/evidence/hypothesis/fact counts (a player who acted shows real non-zero counts, an idle player
+  shows real zeros); `GET /api/games/:gameId/result` publicly returns the same debrief with no cookie
+  required, and 404s for an unfinished game (adversarial) or an unknown gameId (adversarial); `GET
+  /api/rooms/:code/leaderboard` is empty (not an error) for a room with no completed games, 404s for an
+  unknown room code, and reflects a completed game's real score/scenario/players — including, after a
+  rematch, proving the *second* game's leaderboard entry and role-contributions never carry over the
+  first game's counts (the V0.6-specific "old state cannot leak into new game" case).
 
 **System-level (`apps/server/src/scripts/botSimulation.ts`)**: not a vitest suite — a standalone
 script that drives 4 real `socket.io-client` connections through the *actual* REST + Socket.IO API
@@ -147,6 +156,19 @@ confirm it appears in the scenario picker and gets auto-selected, then actually 
 with that generated scenario (confirming the in-game view renders normally, not just that the save
 succeeded).
 
+V0.6's social/replay layer was verified end-to-end in a real browser across 3 separate contexts: run a
+tool, submit a final diagnosis, confirm the debrief renders the severity/difficulty badges, scenario
+title, elapsed time, a working "Copy shareable result link" button, and a role-contributions table with
+the real per-player counts (the tool-running player shows non-zero, the other two show real zeros);
+click "Play again," confirm the room returns to a clean LOBBY and the lobby's leaderboard panel now
+shows the just-completed game with its real score/scenario/roster; re-ready and start a second game
+successfully. Separately: the public `/result/:gameId` page renders the same score/root cause/roster
+with no socket connection for a real gameId, and shows the server's real "no finished game with that
+id" message (not a crash) for a bogus one; the landing page's session-stats panel renders real recorded
+numbers plus the "not a validated skill rating" disclaimer. Also independently cross-checked via `curl`
+against a `pnpm bots` run: the public result endpoint's `roleContributions` exactly matched the bot
+script's own per-player tool-execution log.
+
 ## Failure-mode tests specifically (spec section 34 "Failure tests")
 
 | Required case | Where it's covered |
@@ -162,6 +184,8 @@ succeeded).
 | Generated scenario references missing evidence (V0.5) | `scenarioGenerationValidator.test.ts` (unit) and `v0.5.test.ts` "rejects ... a candidate that references missing evidence" (integration, via `POST /api/scenarios/save`) |
 | Generated scenario has a broken unlock graph (V0.5) | `scenarioGenerationValidator.test.ts` (unit, "rejects an evidence unlock referencing an unknown tool id") and `v0.5.test.ts` "rejects ... a candidate with a broken unlock graph" (integration) |
 | Rematch while old events are in flight | `v0.3.test.ts` "a stale final:submit against an already-completed, already-rematched game is rejected" |
+| Old game state leaks into new game's debrief/leaderboard (V0.6) | `v0.6.test.ts` "reflects a completed game with its real score... and after a rematch, the new game's row never leaks the old game's role-contribution counts" |
+| Shareable result for an unfinished/unknown game (V0.6) | `v0.6.test.ts` "404s ... for a game that hasn't finished yet" and "404s for an unknown gameId" |
 
 ## Known gaps
 

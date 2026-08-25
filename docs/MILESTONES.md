@@ -485,4 +485,145 @@ unverified in this sandboxed environment.
 
 ---
 
-(V0.6 onward recorded below as each phase completes.)
+## V0.6 — Social + replay layer
+
+**Goal**: turn a single finished game into something a team actually wants to do again and show
+off — a debrief that reflects the real game just played (not just a grading outcome), a low-friction
+way to start another round without losing the group, a lightweight sense of progress across a
+session with no accounts, and a way to share a result outside the room — all without ever inventing
+a metric, a percentile, or a "skill rating" the data doesn't support.
+
+**What changed**:
+- **V0.6.1 Debrief upgrade** (`packages/shared/src/domain.ts`, `apps/server/src/services/
+  finalizationService.ts`): `Debrief` gained `scenarioId`, `scenarioTitle`, `severity`, `difficulty`,
+  `completionSeconds`, and a new `roleContributions: RoleContribution[]` — one row per player with
+  `toolsExecuted`, `evidenceUnlocked`, `hypothesesProposed`, `knownFactsAdded`, all computed from real
+  persisted rows (`tool_actions`, `game_evidence`, `hypotheses`, `known_facts`), never estimated. Two
+  new repo queries (`findUnlockedEvidenceRows`, `findToolActionsForGame` in `gameContentRepo.ts`)
+  return every row (not just distinct executors) so per-player counts can be built without N+1 queries
+  — `buildRoleContributions()` issues a fixed 4 queries regardless of player count. `DebriefView.tsx`
+  renders the new fields: severity/difficulty badges, scenario title, elapsed time, and a role-
+  contributions table.
+- **V0.6.2 Session-level stats** (`apps/web/src/lib/sessionStats.ts`): purely client-side,
+  `localStorage`-backed, keyed by gameId so a re-render or reconnect can never double-count a game.
+  Tracks games completed, average score, fastest diagnosis, roles played, scenarios completed — every
+  field a real recorded fact pulled straight from that game's `Debrief`. Rendered on the landing page
+  with an explicit "tracked locally in this browser only - not a validated skill rating, no accounts
+  involved" disclaimer, and only shown once at least one game has been recorded.
+- **V0.6.3 Rematch/replay UX** (`apps/web/src/lib/lastPlayed.ts`, `LobbyView.tsx`, `DebriefView.tsx`):
+  the debrief screen's host controls became two buttons — **Play again** (rematch, and the lobby's
+  scenario/difficulty/duration picker pre-fills from `localStorage`'s last-played choice so the host
+  doesn't have to reconfigure) and **New scenario** (rematch, plus a one-shot `sessionStorage` hint
+  that makes the lobby's catalog picker deliberately land on a different scenario than the one just
+  played). Neither button bypasses the server's existing ready-reset on rematch (`roomService.
+  rematchRoom`) — that's a deliberate multiplayer-correctness safeguard (everyone consciously re-
+  readies before a new round starts), not friction to remove. Roles are already freshly randomized on
+  every `game:start` (unchanged since V0.1) — the debrief screen states this rather than adding a fake
+  "randomize" toggle for something that's already unconditionally true. "Same group" is inherent:
+  rematch reuses the same room/room code.
+- **V0.6.4 Shareable results** (`apps/server/src/routes/games.ts`, `services/resultsService.ts`,
+  `apps/web/src/pages/ResultView.tsx`): a public, read-only `GET /api/games/:gameId/result` returns
+  `{gameId, completedAt, debrief}` for a finished game (404, never a partial/fabricated payload, for an
+  unknown or not-yet-finalized game — access control is the unguessable gameId UUID itself, same
+  posture as every other unauthenticated MVP-scope route). A new frontend route `/result/:gameId`
+  renders a read-only summary card (score, root cause, team roster) with no socket connection and no
+  session cookie required. The debrief screen's "Copy shareable result link" button builds the URL
+  client-side.
+- **V0.6.5 Room-scoped leaderboard** (`GET /api/rooms/:code/leaderboard`, `LeaderboardPanel.tsx`):
+  every completed game played in a room, most recent first, built entirely from real persisted
+  `game_results` rows joined against that room's `games`. Deliberately room-scoped, not global — with
+  no accounts, a cross-room ranking would conflate different people under the same display name and
+  imply a comparability the data doesn't support. Shown in the lobby once at least one game in the room
+  has completed; empty (not an error) otherwise. Batches game-player lookups across all of a room's
+  completed games in one query (`findGamePlayersForGames`) instead of one query per game.
+
+**Acceptance conditions**:
+- PASS debrief reflects real game events, never fabricated metrics — every new field (`roleContributions`,
+  `completionSeconds`, `scenarioId/Title/severity/difficulty`) is sourced from persisted rows or the
+  scenario definition already used to score the game; verified by `v0.6.test.ts` asserting a player who
+  executed a tool/added a fact/proposed a hypothesis shows a real non-zero count and an idle player
+  shows real zeros, never a guessed value
+- PASS session stats never framed as a validated skill score — explicit disclaimer text on the landing
+  page, `sessionStats.ts`'s own doc comment states this is not a cross-device profile
+- PASS rematch/replay is low-friction — one click each for "Play again" (pre-filled scenario/difficulty)
+  and "New scenario" (deliberately different scenario), both reusing the existing rematch mechanism
+- PASS old game state cannot leak into a new game via the new debrief/leaderboard data — adversarial
+  test in `v0.6.test.ts`: after a rematch, the second game's `roleContributions` are all real zeros
+  (nobody touched a tool/hypothesis/fact in the fresh game), not a carry-over from the first game
+- PASS shareable results derive from real stored data, no invented percentile ranking — `PublicGameResult`
+  wraps the exact same `Debrief` a player already saw; `ResultView.tsx` renders no derived ranking at all
+- PASS shareable result endpoint 404s (never a partial/fabricated result) for an unfinished or unknown
+  game — 2 dedicated adversarial tests in `v0.6.test.ts`
+- PASS leaderboard is optional, honest, and only built because it stayed straightforward — room-scoped
+  (not global), sourced entirely from real `game_results`, empty array (not an error) when no games have
+  completed yet, verified live and in `v0.6.test.ts`
+- PASS existing tests remain green — every V0.1-V0.5 test file continues to pass unmodified in behavior
+  (62 game-engine + 83 `packages/ai` + 67 pre-existing server tests, all still passing)
+- PASS new behavior has real test coverage — 8 new server tests (`v0.6.test.ts`) covering the debrief
+  upgrade, the public result endpoint (success + 2 adversarial 404 cases), and the leaderboard (empty,
+  unknown room, and the rematch-no-leakage case)
+- PASS full monorepo `pnpm run build` / `tsc --noEmit` clean across all 5 workspace packages
+- PASS docs updated — this entry, `docs/DECISIONS.md`, `docs/GAME_DESIGN.md`, `docs/DATABASE.md`,
+  `docs/WEBSOCKET_PROTOCOL.md`, `docs/TESTING.md`, `README.md`
+
+**Tests run**: `packages/game-engine` 62/62 (unchanged — no game-engine code touched this phase).
+`packages/ai` 83/83 (unchanged — no AI-provider code touched this phase; V0.6 has no AI surface).
+`apps/server` 75/75 (was 67, +8 in new `v0.6.test.ts`). Root `pnpm run build` (`tsc -p` across all 5
+packages, including `apps/web`'s `vite build`) clean. Combined total across the whole monorepo: **220
+automated tests, all passing.**
+
+**Runtime verification**: real Chromium (Playwright), 3 separate browser contexts. Full flow: create
+room → 2 more players join → ready up → host starts a demo-duration game → a player runs a tool →
+host submits a final diagnosis → debrief renders with severity/difficulty badges, scenario title,
+elapsed time, a "Copy shareable result link" button, and a role-contributions table showing the real
+per-player tool/evidence/hypothesis/fact counts (verified the tool-running player shows 1 tool + 1
+evidence, the other two show real zeros) → host clicks "Play again" → room returns to LOBBY → the
+lobby's leaderboard panel now shows the just-completed game (score, scenario, all 3 players with their
+roles) → everyone re-readies → host starts a second game successfully. Separately verified: the public
+`/result/:gameId` page renders the same score/root cause/team roster with no socket connection, for a
+real gameId; a bogus gameId renders the server's real "No finished game with that id" message rather
+than crashing or showing fabricated data. Separately verified: the landing page's session-stats panel
+renders real recorded numbers and the "not a validated skill rating" disclaimer. Also ran `pnpm bots`
+(bot-simulation script, unmodified) end-to-end and independently confirmed the live server's public
+result endpoint via `curl` returns real per-role tool-execution counts matching the bot log exactly
+(10/10/4/... tool executions).
+
+**DeepSeek calls made this phase**: 0. V0.6 has no AI-provider surface — the debrief content fields
+that already came from `aiProvider.generateDebrief` (V0.1) are unchanged; every new field this phase
+is computed deterministically from persisted rows, not model output.
+
+**Approximate spend this phase**: $0.00. Cumulative: **$0.00 of $8.00**.
+
+**Bugs found**: one type error caught immediately by `tsc --noEmit` during development, not shipped —
+`findUnlockedEvidenceRows`'s return type initially declared `unlockedByPlayerId: string`, but the
+underlying `game_evidence.unlocked_by_player_id` column is nullable; fixed by correcting the type to
+`string | null` and skipping null rows when aggregating per-player evidence counts, rather than
+asserting non-null. One N+1 query pattern caught during the code-quality review pass before committing
+(not shipped): the room leaderboard initially issued one `findGamePlayers` query per game in the room;
+replaced with a single batched `findGamePlayersForGames(gameIds)` query.
+
+**Architecture changes**: new `resultsService.ts` (`apps/server/src/services/`) is the single place
+that builds public-facing result/leaderboard data from `games`/`game_results`/`game_players` — mirrors
+the existing pattern of one service per read-model rather than growing `finalizationService.ts` or
+`roomService.ts` to cover an unrelated concern. Two new REST routes (`GET /api/games/:gameId/result`,
+`GET /api/rooms/:code/leaderboard`) are the first genuinely public (no room-session cookie, no socket)
+authenticated-by-obscurity endpoints in the project beyond the V0.5 scenario-generation routes — same
+documented MVP-scope tradeoff, called out again in "Known remaining limitations" below. No changes to
+the state machine, the AI provider interface, or the scoring/evidence/unlock pipeline — V0.6 is purely
+additive read-models plus client-side UX on top of data that already existed (`game_results.debrief`,
+`tool_actions`, `game_evidence`, `hypotheses`, `known_facts`) or already happened (rematch, role
+reassignment).
+
+**Known remaining limitations**: `GET /api/games/:gameId/result` and `GET /api/rooms/:code/leaderboard`
+are unauthenticated, same MVP-scope caveat as V0.5's scenario-generation routes — acceptable given no
+accounts and no public deployment target yet, worth revisiting before one. Session stats and the
+last-played/new-scenario hints live in `localStorage`/`sessionStorage` only — they don't survive a
+cleared browser, a different device, or private browsing, and are explicitly not a substitute for
+accounts. The room leaderboard has no pagination — fine at MVP scale (a handful of rematches per room
+session) but would need one for a room played over a very long history. No new DeepSeek surface was
+added or exercised this phase.
+
+---
+
+(V1 onward would be recorded below, if that phase existed — it does not: the governing task scope
+stops at V0.6.)

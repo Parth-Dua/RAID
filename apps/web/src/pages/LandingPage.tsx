@@ -2,6 +2,8 @@ import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createRoom, joinRoom, ApiError } from "../api/http.js";
 import { saveIdentity } from "../state/identity.js";
+import { summarizeSessionStats } from "../lib/sessionStats.js";
+import { roleLabel } from "../lib/format.js";
 
 export function LandingPage() {
   const navigate = useNavigate();
@@ -10,6 +12,7 @@ export function LandingPage() {
   const [mode, setMode] = useState<"create" | "join">("create");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stats] = useState(() => summarizeSessionStats());
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -104,6 +107,32 @@ export function LandingPage() {
         <p className="text-center text-ink-400 text-xs mt-6">
           No signup. Your session is a browser cookie tied to this room only.
         </p>
+
+        {stats.gamesCompleted > 0 && (
+          <div className="mt-6 bg-ink-900 border border-ink-700 rounded-lg p-4">
+            <div className="text-xs text-ink-300 uppercase tracking-wide mb-2">Your stats (this browser)</div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-ink-300">
+              <div>
+                Games completed: <span className="text-ink-100 font-mono">{stats.gamesCompleted}</span>
+              </div>
+              <div>
+                Average score: <span className="text-ink-100 font-mono">{stats.averageScore}</span>
+              </div>
+              <div>
+                Fastest diagnosis:{" "}
+                <span className="text-ink-100 font-mono">
+                  {stats.fastestDiagnosisSeconds !== null ? `${stats.fastestDiagnosisSeconds}s` : "—"}
+                </span>
+              </div>
+              <div>
+                Roles played: <span className="text-ink-100">{stats.rolesPlayed.map(roleLabel).join(", ") || "—"}</span>
+              </div>
+            </div>
+            <div className="text-[10px] text-ink-500 mt-2">
+              Tracked locally in this browser only - not a validated skill rating, no accounts involved.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -152,7 +152,7 @@ V0.2 — Playability + role balance             [shipped]
 V0.3 — Scenario expansion + replayability      [shipped]
 V0.4 — Adaptive multiplayer AI                [shipped]
 V0.5 — AI-assisted scenario generation        [shipped]
-V0.6 — Social + replay layer
+V0.6 — Social + replay layer                  [shipped]
 ```
 
 Current status and per-version acceptance results: [`docs/MILESTONES.md`](docs/MILESTONES.md).
@@ -166,5 +166,6 @@ Current status and per-version acceptance results: [`docs/MILESTONES.md`](docs/M
 - No automated frontend test suite — covered by server-side integration tests against the same API surface plus scripted multi-session browser testing.
 - No CI pipeline — test commands are run by hand.
 - AI-generated scenarios (V0.5) have no field-by-field editor — the only way to change one is regenerating with a clearer description. Scenario generation/save endpoints are unauthenticated, acceptable at this MVP's accounts-free scope but worth revisiting before any public deployment.
+- Session stats and the rematch "last played" hint (V0.6) live in one browser's local storage only — no accounts, no cross-device history. The shareable-result and room-leaderboard endpoints (V0.6) are unauthenticated, gated only by an unguessable game id or the room's own invite code — same accounts-free MVP tradeoff as V0.5's scenario endpoints.
 
 See [`docs/EVALUATION.md`](docs/EVALUATION.md) for a full scored self-assessment with evidence for and against each score.

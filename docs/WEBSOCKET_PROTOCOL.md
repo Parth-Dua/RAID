@@ -19,6 +19,13 @@ uses to build payloads, and both compile against the same TypeScript types.
   it a disambiguated `scenarioId` usable anywhere a built-in scenario id is (including `game:start`'s
   payload below). All three are unauthenticated and not room-scoped — read-only or globally-available
   content, not covered by the socket auth flow.
+- `GET /api/games/:gameId/result` (V0.6.4) returns `{gameId, completedAt, debrief}` for a finished
+  game, or 404 for an unknown or not-yet-finalized one — public, no session cookie required (see
+  ADR-025). This is what the `/result/:gameId` frontend route and the debrief screen's "Copy
+  shareable result link" button use; it is never called over the socket connection.
+- `GET /api/rooms/:code/leaderboard` (V0.6.5) returns `{entries: LeaderboardEntry[]}` — every
+  completed game in that room, most recent first, or an empty array (never an error) for a room with
+  no completed games yet. Also public, gated only by knowing the room code (see ADR-026).
 - Handshake auth: `io(url, { withCredentials: true, auth: { roomCode } })`. The server's
   `socketAuthMiddleware` (`apps/server/src/sockets/auth.ts`) reads the session cookie from the
   handshake headers, resolves it to a player, and rejects the connection outright (`connect_error`)

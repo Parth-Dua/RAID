@@ -3,7 +3,7 @@ import { RoleToolsPanel } from "../components/RoleToolsPanel.js";
 import { SharedIncidentPanel } from "../components/SharedIncidentPanel.js";
 import { PrivateFindingsPanel } from "../components/PrivateFindingsPanel.js";
 import { ChatPanel } from "../components/ChatPanel.js";
-import { formatClock } from "../lib/format.js";
+import { formatClock, roleLabel } from "../lib/format.js";
 
 export function GameView({ roomCode }: { roomCode: string }) {
   const { gameSnapshot, remainingSeconds } = useGame();
@@ -60,19 +60,4 @@ function PanelBox({ title, children }: { title: string; children: React.ReactNod
       <div className="flex-1 overflow-y-auto scrollbar-thin p-3 min-h-0">{children}</div>
     </div>
   );
-}
-
-function roleLabel(role: string | null): string {
-  switch (role) {
-    case "backend_engineer":
-      return "Backend Engineer";
-    case "database_engineer":
-      return "Database Engineer";
-    case "sre":
-      return "SRE / Infra";
-    case "incident_commander":
-      return "Incident Commander";
-    default:
-      return "Your role";
-  }
 }

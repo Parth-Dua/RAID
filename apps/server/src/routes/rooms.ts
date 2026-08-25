@@ -5,6 +5,7 @@ import { setSessionCookie } from "../domain/session.js";
 import { RaidError } from "../domain/errors.js";
 import * as roomService from "../services/roomService.js";
 import { findRoomByCode } from "../repositories/roomsRepo.js";
+import { getRoomLeaderboard } from "../services/resultsService.js";
 import { isValidRoomCode } from "@raid/shared";
 
 export const roomsRouter = Router();
@@ -44,6 +45,20 @@ roomsRouter.get("/:code", async (req, res, next) => {
     if (!room) throw new RaidError("ROOM_NOT_FOUND", "No room with that code");
     const snapshot = await roomService.getRoomSnapshot(db, room.id);
     res.status(200).json(snapshot);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** V0.6.5: room-scoped leaderboard - not authenticated beyond knowing the room code, same posture
+ * as every other room-lookup route here. Empty array (not an error) for a room with no completed
+ * games yet. */
+roomsRouter.get("/:code/leaderboard", async (req, res, next) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    if (!isValidRoomCode(code)) throw new RaidError("ROOM_NOT_FOUND", "Invalid room code");
+    const entries = await getRoomLeaderboard(db, code);
+    res.status(200).json({ entries });
   } catch (err) {
     next(err);
   }
