@@ -17,7 +17,8 @@ export type GameEventType =
   | "SIMULATION_EVENT"
   | "FINAL_SUBMITTED"
   | "GAME_COMPLETED"
-  | "GAME_ABANDONED";
+  | "GAME_ABANDONED"
+  | "ROOM_REMATCH";
 
 export async function appendEvent(
   db: Database,

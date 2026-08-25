@@ -29,11 +29,12 @@ an entry in `LEGAL_TRANSITIONS`, and every non-arrow (e.g. `ACTIVE → LOBBY`) t
 ad-hoc phase checks scattered across handlers) is the single authority.
 
 1. Landing page → create room (get a 5-character code) or join one.
-2. Lobby: players see each other join in real time, mark ready, host picks a duration
-   (5 min demo / 20 min standard) and starts.
+2. Lobby: players see each other join in real time, mark ready; the host also picks a **scenario**
+   (V0.3 — see below), a **difficulty** (NORMAL/HARD), and a duration (5 min demo / 20 min standard),
+   then starts.
 3. Server atomically assigns roles (`roomService.assignRoles` — Fisher-Yates shuffle over the role
    pool, 4 players get all four roles, 3 players get the three investigative roles and no IC) and
-   instantiates the scenario for the chosen duration.
+   instantiates the chosen scenario at the chosen difficulty for the chosen duration.
 4. Each player receives a private `game:snapshot`: their role, their role's tools, and only the
    evidence their role can see that has already unlocked (nothing, at t=0).
 5. Investigation: players run tools (deterministic, some time-gated — see below), evidence unlocks
@@ -75,7 +76,29 @@ V0.2 role-balance review; the fix (two new IC-exclusive tools, evidence gated th
 other role's) is enforced going forward by an automated check (`evaluateScenarioQuality`'s "Incident
 Commander has at least one active tool") so a future scenario can't reintroduce a passive IC silently.
 
-## The scenario: Checkout Degradation
+## Scenarios (V0.3)
+
+RAID ships **3 scenarios**, chosen by the host in the lobby (`GET /api/scenarios` serves the catalog;
+`SCENARIO_REGISTRY` in `packages/game-engine/src/scenarioEngine.ts` is the single place scenario ids
+are switched on — no `if (scenario.id === ...)` branching exists anywhere else in product logic, per
+V0.3.3). Each is a genuinely different failure *mechanism*, not a reskin of the others, so the
+investigative reasoning actually differs between them:
+
+| Scenario | id | Mechanism | Root cause |
+|---|---|---|---|
+| Checkout Degradation | `checkout-degradation` | Query-volume-driven connection-pool exhaustion | A deploy adds an N+1 per-item DB lookup; query volume jumps, the fixed pool saturates, requests time out waiting for a connection |
+| Order Processing Stall | `lock-contention` | Lock contention, not pool exhaustion | A deploy launches a backfill job as one long uncommitted transaction holding row locks; every normal write blocks waiting for the same locks, so connections look "in use" while doing no work |
+| Recommendation Service Crash Loop | `memory-leak` | Unbounded memory growth → OOM kill/restart cycle | A deploy adds an in-process cache keyed by a fresh per-request id instead of user id; cache entries are never reused/evicted, memory climbs until each pod is OOM-killed and restarts, producing an intermittent, cyclical failure pattern rather than a steady one |
+
+All three share the same structural shape (deploy-triggered, 4 roles, time-gated evidence, red
+herrings, a documented causal chain) but the *surface symptoms* and the *tool readings that rule out
+the wrong explanation* are specific to each mechanism — e.g. checkout-degradation's smoking gun is a
+saturated connection pool actively executing queries, while lock-contention's near-identical-looking
+"pool looks full" reading is actually connections sitting idle-in-transaction, and memory-leak's
+CPU/memory panel shows a sawtooth (climb-then-reset-on-restart) pattern that neither of the other two
+scenarios produce.
+
+### Checkout Degradation (detail)
 
 **Symptoms**: checkout latency rises from ~200ms to several seconds; a growing share of requests
 fail with 5xx; CPU/memory stay flat; a deploy went out shortly before symptoms began.
@@ -101,22 +124,93 @@ metric), a crash loop / memory leak (ruled out by zero pod restarts + flat memor
 (ruled out by DB's normal replica lag), lock contention (ruled out by DB's empty lock monitor), a slow
 payment dependency (ruled out by backend's normal payment-provider stats).
 
-**Time-gated evidence**: several key items (the N+1 trace, the error logs, the pool-saturation graph,
-the query-volume spike, the flat-CPU reading) only appear once the simulation clock passes a fraction
-of the total duration — checking a tool at t=0 shows a deliberately boring baseline. This rewards
-re-checking tools as the incident evolves rather than a single "click everything once" pass, and
-means the *order* and *timing* of investigation matters, not just coverage.
+### Order Processing Stall (detail)
 
-Durations are authored once as fractions of `durationSeconds` and scaled at scenario-build time
-(`buildCheckoutDegradationScenario(durationSeconds)`) — a 60s "instant" preset (used only by the bot
-script and integration tests) and the real 5min/20min presets share one causal script instead of
-maintaining parallel content.
+**Symptoms**: order writes (checkout completion, order status updates) queue up and time out; reads
+are unaffected; a deploy went out shortly before symptoms began.
+
+**Ground truth**: a deploy launches `backfillLoyaltyTier`, a one-time job that updates `loyalty_tier`
+across the entire `orders` table inside a single long-running, uncommitted transaction instead of many
+small committed batches. That transaction holds row locks on `orders` for its whole multi-minute
+duration. Every normal order-write transaction then blocks waiting on those same locks; blocked
+connections sit **idle-in-transaction** rather than executing, so the pool *looks* fully utilized —
+the same surface symptom as checkout-degradation — for a completely different underlying reason.
+Once wait time exceeds the statement timeout, order writes fail. CPU/memory stay flat because pods are
+blocked, not busy.
+
+**Key evidence** (8 items spanning 3 roles): the backfill deploy note and the blocked-on-lock trace and
+error logs (backend); the blocking-chain lock monitor reading and the idle-in-transaction connection
+breakdown and the long-running-statement reading (database); flat CPU/memory and normal request rate
+(SRE). The trap this scenario specifically tests: a team that stops at "the pool looks saturated" and
+reaches for checkout-degradation's diagnosis (query volume) will be wrong — the pool reading alone
+doesn't distinguish "busy executing queries" from "blocked waiting on a lock," and only the database
+role's idle-in-transaction/long-running-statement readings resolve the ambiguity.
+
+**Five red herrings**: a traffic spike (ruled out by normal request rate), a deadlock (ruled out — the
+deadlock detector shows zero deadlocks; this is lock *wait*, not a deadlock), a slow downstream
+dependency (ruled out — both report normal latency), replication lag (ruled out — normal), a pod crash
+loop (ruled out — zero restarts/OOMKills).
+
+### Recommendation Service Crash Loop (detail)
+
+**Symptoms**: `recommendation-service` intermittently fails with 503s in bursts, each burst apparently
+hitting a different pod; a deploy went out before symptoms began.
+
+**Ground truth**: a deploy adds an in-process response cache keyed by a fresh per-request UUID instead
+of user id. Every request creates a new cache entry that is never reused or evicted, so each pod's
+memory grows without bound until it hits its container memory limit. Kubernetes OOM-kills the pod; it
+restarts; requests routed to it during the restart/readiness window fail with 503. Because pods leak
+independently and restart on their own schedule, the failure pattern is intermittent and cyclical
+rather than a constant outage — and CPU stays flat throughout, since this is a memory problem, not a
+compute problem.
+
+**Key evidence** (7 items spanning 3 roles): the deploy note and the growing-cache-entry-count reading
+and the correlated error logs (backend); *normal* connection/query metrics (database — the deliberate
+"ruling-out" negative key evidence, since the DB genuinely isn't the culprit here but a team still has
+to check and rule it out); the sawtooth CPU/memory pattern and the climbing OOMKill count and normal
+request rate (SRE). This scenario specifically tests whether a team notices the *shape* of the failure
+(cyclical, memory-only, per-pod-independent) rather than pattern-matching it onto "just another crash."
+
+**Five red herrings**: a slow/failing downstream ML model service (ruled out — normal), a traffic
+spike (ruled out — normal baseline), a slow DB query (ruled out — normal latency), network issues
+(ruled out — normal), a node/infra failure (ruled out — infra events show only memory-limit OOM kills).
+
+### Shared authoring mechanics
+
+**Time-gated evidence**: several key items across every scenario only appear once the simulation clock
+passes a fraction of the total duration — checking a tool at t=0 shows a deliberately boring baseline.
+This rewards re-checking tools as the incident evolves rather than a single "click everything once"
+pass, and means the *order* and *timing* of investigation matters, not just coverage.
+
+Durations and unlock thresholds are authored once as fractions of `durationSeconds` and scaled at
+scenario-build time (e.g. `buildCheckoutDegradationScenario(durationSeconds)`) — a 60s "instant" preset
+(used only by the bot script and integration tests) and the real 5min/20min presets share one causal
+script instead of maintaining parallel content.
+
+## Difficulty (V0.3.2)
+
+Every scenario supports **NORMAL** and **HARD**, chosen alongside the scenario in the lobby. Difficulty
+is a single generic transform (`applyDifficulty()` in `packages/game-engine/src/difficulty.ts`) applied
+uniformly to whichever scenario is selected — see ADR-020 in `docs/DECISIONS.md` for why this is one
+transform rather than per-scenario branching or duplicated content. It changes actual reasoning
+complexity, not just the clock:
+
+- **NORMAL**: evidence items that carry an authored interpretive `hint` show it appended to the raw
+  data — the reader gets the facts *and* a one-line steer on what they mean.
+- **HARD**: the same raw data is shown, but the hint is withheld — the player has to draw the
+  conclusion themselves. Time-gated evidence unlock thresholds are also pushed later (×1.35, capped at
+  95% of the game's duration), so discovery takes longer and rewards patience/re-checking rather than
+  a first pass.
+
+Difficulty never changes the root cause, the remediation, or which evidence counts as key — only how
+legible the path to finding it is.
 
 ## Automated scenario-quality checklist
 
-`packages/game-engine/src/scenarioValidation.ts`'s `evaluateScenarioQuality` mechanically checks the
+`packages/game-engine/src/scenarioValidation.ts`'s `evaluateScenarioQuality` mechanically checks 14
 structural properties good scenario design requires, and is run as a unit test
-(`scenarioValidation.test.ts`) against both the standard and instant duration presets:
+(`scenarioValidation.test.ts`) against **every scenario, at both difficulties, at every duration
+preset** (standard/demo/instant) — 18 combinations as of V0.3, all passing:
 
 - rubric weights sum to exactly 100
 - every `keyEvidenceIds` entry references real evidence (no dangling ids)
@@ -129,26 +223,47 @@ structural properties good scenario design requires, and is run as a unit test
 - every evidence unlock references a real tool id
 - no evidence item is visible to zero roles (dead content)
 - every investigative role has at least 3 evidence items (not a single clue card)
+- the Incident Commander has at least one active tool (V0.2 — not a purely passive role)
+- evidence is roughly balanced across investigative roles (max ≤ 2.5× min — no role is starved or
+  overloaded relative to the others)
+- no single evidence item states the full root-cause summary verbatim (no accidental answer leakage)
+- the root-cause causal chain has at least 4 steps (a real multi-hop mechanism, not a one-line answer)
 
 This cannot prove the scenario is *fun* — that was assessed by actually playing it via the bot
-simulation and manual browser testing (see `docs/REVIEW_NOTES.md` game-design review) — but it
+simulation and manual browser testing (see `docs/REVIEW_NOTES.md` and `docs/PLAYTESTING.md`) — but it
 mechanically enforces every property that would make a scenario *broken* regardless of how well it
-reads.
+reads, and running it against every scenario × difficulty × duration combination means a future
+scenario or a difficulty-transform change can't silently break this for a case nobody happened to test
+by hand.
 
 ## Target pacing
 
 Standard mode targets 15-25 minutes (`DURATION_PRESETS.standard = 1200s`); demo mode targets ~5
 minutes for playtesting (`DURATION_PRESETS.demo = 300s`). An `instant` preset (60s) exists solely for
 automated regression testing (bot script, integration tests) and is not exposed in the web UI's
-duration picker — see `docs/TESTING.md`.
+duration picker — see `docs/TESTING.md`. HARD difficulty pushes time-gated unlocks later within
+whichever duration is chosen (see "Difficulty" above) rather than changing the clock itself, so the
+same duration preset means different effective pacing pressure depending on difficulty.
+
+## Replayability (V0.3.5)
+
+A completed room can rematch in place: the host clicks "Play again with this group," which resets the
+room to LOBBY (same room code, same players, no new invite/join round required), lets the host pick a
+new scenario and/or difficulty, and re-randomizes roles the same way a fresh game start always does.
+No accounts or persistent history are involved — see ADR-021 in `docs/DECISIONS.md` for the state
+machine change and how stale in-flight actions from the previous round are guaranteed not to leak into
+the new one.
 
 ## Known design limitations
 
-- The knowledge board models **Known Facts** and **Hypotheses** (with a status badge that functionally
-  covers "ruled out" via `CONTRADICTED`) but does not have a separate freeform "Open Questions" list —
-  that category from the original brief wasn't given its own data model since nothing else in the
-  domain needed to reference an "open question" as a first-class object; teammates use chat for that.
+- The knowledge board models **Known Facts** and **Hypotheses**, with facts split into a `fact`/
+  `question` category (V0.2) so an "open question" is a real, filterable board item rather than only
+  living in chat, and hypothesis status (`CONTRADICTED`, etc.) functionally covers "ruled out."
 - Tool re-execution has no cost or cooldown beyond the flat rate limiter — a very fast team could
   spam every tool once per second. This didn't come up as a problem in playtesting (the interesting
   bottleneck is understanding, not tool-call throughput) but would be worth revisiting if repeated
   tool-mashing turned out to be a viable "strategy" that undermines investigation pacing.
+- Difficulty (V0.3.2) currently varies clue legibility and unlock timing; it does not vary the number
+  of red herrings or the causal-chain length between NORMAL and HARD for the same scenario — see
+  ADR-020's "what would make us reconsider" for when that would warrant a richer transform (or a
+  distinct scenario) instead.

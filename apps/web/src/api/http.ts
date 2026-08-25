@@ -1,4 +1,4 @@
-import type { RoomSnapshot } from "@raid/shared";
+import type { RoomSnapshot, ScenarioCatalogEntry } from "@raid/shared";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:4000";
 
@@ -40,6 +40,10 @@ export function joinRoom(roomCode: string, displayName: string) {
 
 export function getRoom(roomCode: string) {
   return request<RoomSnapshot>(`/api/rooms/${roomCode}`);
+}
+
+export function getScenarioCatalog() {
+  return request<{ scenarios: ScenarioCatalogEntry[] }>("/api/scenarios");
 }
 
 export { SERVER_URL };

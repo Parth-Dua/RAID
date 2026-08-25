@@ -9,6 +9,9 @@ uses to build payloads, and both compile against the same TypeScript types.
 
 - One Socket.IO connection per browser tab, opened after a REST `POST /api/rooms` or
   `POST /api/rooms/:code/join` call has set the session cookie.
+- `GET /api/scenarios` (V0.3, unauthenticated, not room-scoped) returns the static scenario catalog
+  (`ScenarioCatalogEntry[]` — id, title, severity, briefing, tagline) that populates the lobby's
+  scenario picker; it's read-only content, not covered by the socket auth flow above.
 - Handshake auth: `io(url, { withCredentials: true, auth: { roomCode } })`. The server's
   `socketAuthMiddleware` (`apps/server/src/sockets/auth.ts`) reads the session cookie from the
   handshake headers, resolves it to a player, and rejects the connection outright (`connect_error`)
@@ -26,15 +29,17 @@ via the acknowledgement callback and never reaches application code.
 | Event | Payload | Auth | Ack |
 |---|---|---|---|
 | `player:ready` | `{ ready: boolean }` | must be a room member; room must be `LOBBY` | `{ok:true}` |
-| `game:start` | `{ durationPreset?: "standard"\|"demo"\|"instant" }` | caller must be the room's host (`rooms.hostPlayerId`); room `LOBBY`; 3-4 players, all ready | `{ok:true, data:{gameId}}` |
+| `player:leave` (V0.2) | `{}` | room member; room must be `LOBBY` (once a game has started, a player can only disconnect, not remove themselves — their role/evidence are bound to game rows) | `{ok:true}` |
+| `game:start` | `{ durationPreset?: "standard"\|"demo"\|"instant", scenarioId?: string, difficulty?: "NORMAL"\|"HARD" }` (V0.3: `scenarioId`/`difficulty` added; both optional, defaulting to `checkout-degradation`/`NORMAL`) | caller must be the room's host (`rooms.hostPlayerId`); room `LOBBY`; `scenarioId` (if given) must be a real registered scenario id or the call is rejected with `INVALID_PAYLOAD`; 3-4 players, all ready | `{ok:true, data:{gameId}}` |
+| `game:rematch` (V0.3) | `{}` | caller must be the room's host; room must be `COMPLETED` | `{ok:true}` — broadcasts a fresh `room:snapshot` with `phase:"LOBBY"`, `gameId:null`, and every player's `ready` reset to `false` |
 | `chat:send` | `{ text: string(1-500), clientMsgId: uuid }` | room member; game `ACTIVE` or `FINALIZING` | `{ok:true}` |
 | `tool:execute` | `{ toolId: string }` | tool's `role` must equal the caller's assigned role; game `ACTIVE` | `{ok:true, data:{output, unlockedEvidenceIds}}` |
 | `hypothesis:create` | `{ text: string(5-600), clientMsgId: uuid }` | room member; game `ACTIVE` | `{ok:true, data:{hypothesisId}}` (or `{ok:true}` with no data if `clientMsgId` is a dedup'd retry) |
 | `hypothesis:support` | `{ hypothesisId: uuid }` | room member; game `ACTIVE`; hypothesis belongs to this game | `{ok:true}` |
 | `hypothesis:challenge` | `{ hypothesisId: uuid }` | same as support | `{ok:true}` |
 | `evidence:attach` | `{ hypothesisId: uuid, evidenceId: string }` | evidenceId must be a real scenario evidence id, visible to the caller's role, AND already unlocked | `{ok:true}` |
-| `knownfact:add` | `{ text: string(3-300), sourceEvidenceId?: string\|null }` | if `sourceEvidenceId` set, same visibility+unlock check as `evidence:attach` | `{ok:true}` |
-| `final:submit` | `{ rootCause: string(10-1500), supportingEvidenceIds: string[], remediation: string(5-800), clientMsgId: uuid }` | if the game has an Incident Commander, only they may call this; otherwise any assigned player; game `ACTIVE` | `{ok:true}` |
+| `knownfact:add` | `{ text: string(3-300), category?: "fact"\|"question" (V0.2, default "fact"), sourceEvidenceId?: string\|null }` | if `sourceEvidenceId` set, same visibility+unlock check as `evidence:attach` | `{ok:true}` |
+| `final:submit` | `{ rootCause: string(10-1500), supportingEvidenceIds: string[], remediation: string(5-800), clientMsgId: uuid }` | if the game has an Incident Commander, only they may call this; otherwise any assigned player; game `ACTIVE` (this also covers rematch's stale-action case: a `final:submit` fired after `game:rematch` has cleared `currentGameId` finds no active game and is rejected with `INVALID_PHASE`) | `{ok:true}` |
 
 Every ack either resolves `{ok:true, data?}` or rejects `{ok:false, error:{code,message}}` where
 `code` is one of the `ServerErrorPayload["code"]` values (`NOT_AUTHORIZED`, `INVALID_PHASE`,
@@ -47,8 +52,8 @@ security boundary (see docs/DECISIONS.md Redis ADR for why this is in-memory, no
 
 | Event | Payload | Broadcast scope | When |
 |---|---|---|---|
-| `room:snapshot` | `RoomSnapshot` (full player list, phase, code) | all sockets in `room:<roomId>` | on connect, disconnect, ready toggle, host transfer, game start/complete |
-| `game:snapshot` | `GameSnapshot` — **personalized per player** (own role, own unlocked evidence, own tools) | sent individually to each socket (`io.to(socket.id)`), never broadcast as one shared payload | on connect (if game exists), on game start, on final evaluation |
+| `room:snapshot` | `RoomSnapshot` (full player list, phase, code, current `scenarioId`) | all sockets in `room:<roomId>` | on connect, disconnect, ready toggle, host transfer, game start/complete, rematch |
+| `game:snapshot` | `GameSnapshot` — **personalized per player** (own role, own unlocked evidence, own tools, the game's `difficulty`) | sent individually to each socket (`io.to(socket.id)`), never broadcast as one shared payload | on connect (if game exists), on game start, on final evaluation |
 | `game:event` | `{kind:"chat", message} \| {kind:"known_fact", fact} \| {kind:"timeline_step", step}` | broadcast to `room:<roomId>` | on chat send, known-fact add, and every deterministic timeline reveal (server clock tick) |
 | `timer:update` | `{ remainingSeconds: number }` | broadcast | every 5s while `ACTIVE` |
 | `evidence:unlocked` | `PublicEvidence[]` | **private**, sent only to the executing player's socket | after `tool:execute` newly unlocks evidence |

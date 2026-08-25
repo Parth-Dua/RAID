@@ -38,7 +38,7 @@ export async function tryTransitionRoomPhase(
   expectedPhase: GamePhase,
   expectedVersion: number,
   nextPhase: GamePhase,
-  extra?: { currentGameId?: string },
+  extra?: { currentGameId?: string | null },
 ): Promise<RoomRow | undefined> {
   const [row] = await db
     .update(rooms)
@@ -46,7 +46,7 @@ export async function tryTransitionRoomPhase(
       phase: nextPhase,
       version: sql`${rooms.version} + 1`,
       updatedAt: new Date(),
-      ...(extra?.currentGameId ? { currentGameId: extra.currentGameId } : {}),
+      ...(extra && "currentGameId" in extra ? { currentGameId: extra.currentGameId } : {}),
     })
     .where(sql`${rooms.id} = ${roomId} AND ${rooms.phase} = ${expectedPhase} AND ${rooms.version} = ${expectedVersion}`)
     .returning();

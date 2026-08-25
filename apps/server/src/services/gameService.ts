@@ -50,6 +50,7 @@ export async function buildGameSnapshotForPlayer(db: Database, gameId: string, p
     gameId,
     roomId: roomRow.id,
     scenarioId: scenario.id,
+    difficulty: scenario.difficulty,
     phase: roomRow.phase as GameSnapshot["phase"],
     serverNowMs: Date.now(),
     startedAtMs: gameRow.startedAt?.getTime() ?? null,

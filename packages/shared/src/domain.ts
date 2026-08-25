@@ -59,14 +59,24 @@ export interface EvidenceUnlockCondition {
   /** If both toolId and atSeconds are set, both conditions must hold (AND). */
 }
 
+export const DIFFICULTIES = ["NORMAL", "HARD"] as const;
+export type Difficulty = (typeof DIFFICULTIES)[number];
+
 export interface EvidenceDefinition {
   id: string;
   /** Role(s) that can see this evidence once unlocked. */
   visibleToRoles: Role[];
   title: string;
   category: "log" | "metric" | "trace" | "deployment" | "chat_note" | "incident_fact";
-  /** Rendered content shown to the player. May contain a small structured payload. */
+  /** Rendered content shown to the player: the raw data (log lines, a metric table, ...). */
   content: string;
+  /**
+   * An optional one-line interpretive callout ("this rules out X", "note the pattern here").
+   * Shown appended to `content` on NORMAL difficulty; withheld entirely on HARD, so the same
+   * authored evidence item is objectively harder to read on HARD without being a different
+   * scenario - see packages/game-engine applyDifficulty() and docs/GAME_DESIGN.md "difficulty".
+   */
+  hint?: string;
   unlock: EvidenceUnlockCondition;
   isRedHerring: boolean;
   /** Not sent to clients; used for scoring key-evidence coverage. */
@@ -115,6 +125,7 @@ export interface ScenarioDefinition {
   severity: "SEV-1" | "SEV-2" | "SEV-3";
   briefing: string;
   durationSeconds: number;
+  difficulty: Difficulty;
   timeline: TimelineStep[];
   tools: ToolDefinition[];
   evidence: EvidenceDefinition[];
@@ -126,6 +137,15 @@ export interface ScenarioDefinition {
   };
   plausibleWrongHypotheses: string[];
   rubricWeights: ScenarioRubricWeights;
+}
+
+/** Lightweight, spoiler-free listing used by the scenario-selection UI - never includes evidence/root cause. */
+export interface ScenarioCatalogEntry {
+  id: string;
+  title: string;
+  severity: ScenarioDefinition["severity"];
+  briefing: string;
+  tagline: string;
 }
 
 export interface ToolResult {
@@ -217,6 +237,7 @@ export interface GameSnapshot {
   myRole: Role | null;
   briefing: string;
   severity: ScenarioDefinition["severity"];
+  difficulty: Difficulty;
   timeline: TimelineStep[];
   tools: ToolDefinition[];
   evidence: PublicEvidence[];

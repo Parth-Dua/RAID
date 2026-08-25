@@ -1,20 +1,59 @@
-import type { EvidenceDefinition, PublicEvidence, Role, ScenarioDefinition, ToolResult } from "@raid/shared";
+import type { Difficulty, EvidenceDefinition, PublicEvidence, Role, ScenarioCatalogEntry, ScenarioDefinition, ToolResult } from "@raid/shared";
 import { buildCheckoutDegradationScenario } from "./scenarios/checkoutDegradation.js";
+import { buildLockContentionScenario } from "./scenarios/lockContention.js";
+import { buildMemoryLeakScenario } from "./scenarios/memoryLeak.js";
+import { applyDifficulty } from "./difficulty.js";
 
-export type ScenarioBuilder = (durationSeconds: number) => ScenarioDefinition;
+/** A scenario builder authors ONE canonical (difficulty-neutral) definition; `buildScenario`
+ * below is the only place difficulty is applied, uniformly, to whatever a builder returns - no
+ * scenario module needs to know difficulty exists. This is the "no `if (scenario.id === ...)`
+ * scattered through product logic" requirement in practice: the registry is the only place
+ * scenario identity is switched on, and it's a plain data lookup, not branching logic. */
+export type ScenarioBuilder = (durationSeconds: number) => Omit<ScenarioDefinition, "difficulty">;
 
 const SCENARIO_REGISTRY: Record<string, ScenarioBuilder> = {
   "checkout-degradation": buildCheckoutDegradationScenario,
+  "lock-contention": buildLockContentionScenario,
+  "memory-leak": buildMemoryLeakScenario,
 };
+
+const CATALOG: ScenarioCatalogEntry[] = [
+  {
+    id: "checkout-degradation",
+    title: "Checkout Degradation",
+    severity: "SEV-1",
+    briefing: "Checkout latency is climbing and a growing share of requests are failing outright.",
+    tagline: "A deploy, a query pattern, and a saturated connection pool.",
+  },
+  {
+    id: "lock-contention",
+    title: "Order Processing Stall",
+    severity: "SEV-1",
+    briefing: "Order writes are queueing up and timing out across the board.",
+    tagline: "A migration, a long-held lock, and a growing wait queue.",
+  },
+  {
+    id: "memory-leak",
+    title: "Recommendation Service Crash Loop",
+    severity: "SEV-2",
+    briefing: "A backend service is intermittently failing as its pods restart on a rolling basis.",
+    tagline: "A new feature, a slow leak, and a cascade of OOM kills.",
+  },
+];
 
 export function listScenarioIds(): string[] {
   return Object.keys(SCENARIO_REGISTRY);
 }
 
-export function buildScenario(scenarioId: string, durationSeconds: number): ScenarioDefinition {
+export function listScenarioCatalog(): ScenarioCatalogEntry[] {
+  return CATALOG;
+}
+
+export function buildScenario(scenarioId: string, durationSeconds: number, difficulty: Difficulty = "NORMAL"): ScenarioDefinition {
   const builder = SCENARIO_REGISTRY[scenarioId];
   if (!builder) throw new Error(`Unknown scenario: ${scenarioId}`);
-  return builder(durationSeconds);
+  const base: ScenarioDefinition = { ...builder(durationSeconds), difficulty };
+  return applyDifficulty(base, difficulty);
 }
 
 /**

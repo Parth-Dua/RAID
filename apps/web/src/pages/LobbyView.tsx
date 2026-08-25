@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import type { Difficulty, ScenarioCatalogEntry } from "@raid/shared";
 import { useGame } from "../state/GameProvider.js";
 import { clearIdentity } from "../state/identity.js";
+import { getScenarioCatalog } from "../api/http.js";
 
 export function LobbyView({ roomCode }: { roomCode: string }) {
   const { roomSnapshot, myPlayerId, actions } = useGame();
@@ -9,6 +11,21 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
   const [busy, setBusy] = useState(false);
   const [duration, setDuration] = useState<"standard" | "demo">("demo");
   const [copied, setCopied] = useState(false);
+  const [scenarios, setScenarios] = useState<ScenarioCatalogEntry[]>([]);
+  const [scenarioId, setScenarioId] = useState<string>("");
+  const [difficulty, setDifficulty] = useState<Difficulty>("NORMAL");
+
+  useEffect(() => {
+    getScenarioCatalog()
+      .then(({ scenarios: list }) => {
+        setScenarios(list);
+        setScenarioId((prev) => prev || list[0]?.id || "");
+      })
+      .catch(() => {
+        // Non-fatal: the host-only picker just stays empty and startGame falls back to the
+        // server's default scenario, so this never blocks anyone from starting a game.
+      });
+  }, []);
 
   if (!roomSnapshot) return null;
   const me = roomSnapshot.players.find((p) => p.id === myPlayerId);
@@ -29,7 +46,7 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
   async function start() {
     setBusy(true);
     try {
-      await actions.startGame(duration);
+      await actions.startGame(duration, scenarioId || undefined, difficulty);
     } finally {
       setBusy(false);
     }
@@ -100,7 +117,40 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
 
           {isHost && (
             <div className="bg-ink-900 border border-ink-700 rounded-lg p-4">
-              <div className="text-xs text-ink-300 uppercase tracking-wide mb-2">Incident duration (host only)</div>
+              <div className="text-xs text-ink-300 uppercase tracking-wide mb-2">Scenario (host only)</div>
+              <div className="flex flex-col gap-1.5 mb-3">
+                {scenarios.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setScenarioId(s.id)}
+                    className={`text-left px-3 py-2 rounded text-xs ${
+                      scenarioId === s.id ? "bg-accent text-white" : "bg-ink-800 text-ink-300 hover:bg-ink-700"
+                    }`}
+                  >
+                    <div className="font-semibold">{s.title}</div>
+                    <div className={scenarioId === s.id ? "text-white/80" : "text-ink-400"}>{s.tagline}</div>
+                  </button>
+                ))}
+                {scenarios.length === 0 && <div className="text-xs text-ink-500">Loading scenarios...</div>}
+              </div>
+
+              <div className="text-xs text-ink-300 uppercase tracking-wide mb-2">Difficulty</div>
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => setDifficulty("NORMAL")}
+                  className={`flex-1 text-sm py-1.5 rounded ${difficulty === "NORMAL" ? "bg-accent text-white" : "bg-ink-800 text-ink-300"}`}
+                >
+                  Normal
+                </button>
+                <button
+                  onClick={() => setDifficulty("HARD")}
+                  className={`flex-1 text-sm py-1.5 rounded ${difficulty === "HARD" ? "bg-accent text-white" : "bg-ink-800 text-ink-300"}`}
+                >
+                  Hard
+                </button>
+              </div>
+
+              <div className="text-xs text-ink-300 uppercase tracking-wide mb-2">Incident duration</div>
               <div className="flex gap-2 mb-3">
                 <button
                   onClick={() => setDuration("demo")}

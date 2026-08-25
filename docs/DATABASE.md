@@ -46,6 +46,7 @@ erDiagram
         uuid id PK
         uuid room_id FK
         varchar scenario_id "code-defined, not a DB row"
+        varchar difficulty "NORMAL default, or HARD (V0.3)"
         int duration_seconds
         timestamptz started_at
         timestamptz ends_at

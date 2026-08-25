@@ -3,6 +3,7 @@ import type { Socket } from "socket.io-client";
 import type {
   ChatMessage,
   Debrief,
+  Difficulty,
   GameSnapshot,
   Hypothesis,
   KnownFact,
@@ -30,7 +31,8 @@ interface GameContextValue {
   actions: {
     setReady: (ready: boolean) => Promise<void>;
     leaveRoom: () => Promise<void>;
-    startGame: (durationPreset?: "standard" | "demo") => Promise<{ gameId: string }>;
+    startGame: (durationPreset?: "standard" | "demo", scenarioId?: string, difficulty?: Difficulty) => Promise<{ gameId: string }>;
+    rematch: () => Promise<void>;
     sendChat: (text: string) => Promise<void>;
     executeTool: (toolId: string) => Promise<{ output: string; unlockedEvidenceIds: string[] }>;
     createHypothesis: (text: string) => Promise<void>;
@@ -58,6 +60,12 @@ function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
 
 export function GameProvider({ roomCode, playerId, children }: { roomCode: string; playerId: string; children: React.ReactNode }) {
   const socketRef = useRef<Socket | null>(null);
+  // Tracks the room's current gameId (set from room:snapshot, which always arrives before any
+  // per-game event for that game - see onGameStart/handleConnection ordering server-side). Used
+  // to drop any game:snapshot that names a gameId other than the room's current one, in case a
+  // stale async callback from a just-replaced game (e.g. a rematch firing mid-flight) still
+  // manages to emit one - defense in depth for V0.3.5 "old state cannot leak into new game".
+  const activeGameIdRef = useRef<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<GameContextValue["connectionStatus"]>("connecting");
   const [roomSnapshot, setRoomSnapshot] = useState<RoomSnapshot | null>(null);
   const [gameSnapshot, setGameSnapshot] = useState<GameSnapshot | null>(null);
@@ -80,8 +88,20 @@ export function GameProvider({ roomCode, playerId, children }: { roomCode: strin
       pushError(`Connection failed: ${err.message}`);
     });
 
-    socket.on("room:snapshot", (snap: RoomSnapshot) => setRoomSnapshot(snap));
+    socket.on("room:snapshot", (snap: RoomSnapshot) => {
+      setRoomSnapshot(snap);
+      activeGameIdRef.current = snap.gameId;
+      // A rematch resets the room to LOBBY with no game yet - clear the previous round's game
+      // state so its evidence/chat/debrief can never bleed into the next round's view, even for
+      // a moment before the new game:snapshot arrives (V0.3.5 "old state cannot leak").
+      if (snap.phase === "LOBBY" && !snap.gameId) {
+        setGameSnapshot(null);
+        setDebrief(null);
+        setRemainingSeconds(null);
+      }
+    });
     socket.on("game:snapshot", (snap: GameSnapshot) => {
+      if (activeGameIdRef.current && snap.gameId !== activeGameIdRef.current) return;
       setGameSnapshot(snap);
       if (snap.endsAtMs) setRemainingSeconds(Math.max(0, Math.round((snap.endsAtMs - Date.now()) / 1000)));
       if (snap.debrief) setDebrief(snap.debrief);
@@ -143,7 +163,9 @@ export function GameProvider({ roomCode, playerId, children }: { roomCode: strin
           await emitAck(socketRef.current!, "player:leave", {});
           socketRef.current?.disconnect();
         }),
-      startGame: (durationPreset) => guarded(() => emitAck(socketRef.current!, "game:start", { durationPreset })),
+      startGame: (durationPreset, scenarioId, difficulty) =>
+        guarded(() => emitAck(socketRef.current!, "game:start", { durationPreset, scenarioId, difficulty })),
+      rematch: () => guarded(() => emitAck(socketRef.current!, "game:rematch", {})),
       sendChat: (text) => guarded(() => emitAck(socketRef.current!, "chat:send", { text, clientMsgId: uuid() })),
       executeTool: (toolId) => guarded(() => emitAck(socketRef.current!, "tool:execute", { toolId })),
       createHypothesis: (text) => guarded(() => emitAck(socketRef.current!, "hypothesis:create", { text, clientMsgId: uuid() })),

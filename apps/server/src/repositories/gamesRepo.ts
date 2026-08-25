@@ -8,13 +8,14 @@ export type GamePlayerRow = typeof gamePlayers.$inferSelect;
 
 export async function insertGame(
   db: Database,
-  params: { roomId: string; scenarioId: string; durationSeconds: number; startedAt: Date; endsAt: Date },
+  params: { roomId: string; scenarioId: string; difficulty: string; durationSeconds: number; startedAt: Date; endsAt: Date },
 ): Promise<GameRow> {
   const [row] = await db
     .insert(games)
     .values({
       roomId: params.roomId,
       scenarioId: params.scenarioId,
+      difficulty: params.difficulty,
       durationSeconds: params.durationSeconds,
       startedAt: params.startedAt,
       endsAt: params.endsAt,

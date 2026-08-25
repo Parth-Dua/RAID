@@ -1,5 +1,5 @@
 import { buildScenario, computeSimulationSeconds } from "@raid/game-engine";
-import type { ScenarioDefinition } from "@raid/shared";
+import type { Difficulty, ScenarioDefinition } from "@raid/shared";
 import type { Database } from "../db/client.js";
 import { RaidError } from "../domain/errors.js";
 import * as roomsRepo from "../repositories/roomsRepo.js";
@@ -17,7 +17,7 @@ export async function loadActiveGame(db: Database, gameId: string): Promise<Load
   if (!gameRow) throw new RaidError("ROOM_NOT_FOUND", "Game not found");
   const roomRow = await roomsRepo.findRoomById(db, gameRow.roomId);
   if (!roomRow) throw new RaidError("ROOM_NOT_FOUND", "Room not found");
-  const scenario = buildScenario(gameRow.scenarioId, gameRow.durationSeconds);
+  const scenario = buildScenario(gameRow.scenarioId, gameRow.durationSeconds, gameRow.difficulty as Difficulty);
   const elapsedSeconds = gameRow.startedAt
     ? Math.min(gameRow.durationSeconds, computeSimulationSeconds(gameRow.startedAt.getTime(), Date.now()))
     : 0;

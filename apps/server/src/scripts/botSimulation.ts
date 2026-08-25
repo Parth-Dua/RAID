@@ -15,6 +15,31 @@
 import { io, type Socket } from "socket.io-client";
 
 const BASE_URL = process.env.RAID_SERVER_URL ?? "http://localhost:4000";
+const SCENARIO_ID = process.env.RAID_SCENARIO_ID ?? "checkout-degradation";
+const DIFFICULTY = process.env.RAID_DIFFICULTY ?? "NORMAL";
+
+/** Root-cause submission this script sends for each scenario (V0.3: 3 scenarios exist now, so
+ * the previously-hardcoded checkout-degradation submission needed a lookup keyed by scenario). */
+const FINAL_SUBMISSIONS: Record<string, { rootCause: string; supportingEvidenceIds: string[]; remediation: string }> = {
+  "checkout-degradation": {
+    rootCause:
+      "The v2.14.0 deploy added a per-item loyalty_history lookup causing N+1 query volume, which saturated the fixed 20-connection database pool and caused request timeouts.",
+    supportingEvidenceIds: ["be_deploy_log", "db_pool_saturation", "sre_cpu_mem_flat"],
+    remediation: "Batch the loyalty_history lookup into a single query per cart and roll back if needed while it's fixed.",
+  },
+  "lock-contention": {
+    rootCause:
+      "The v4.2.0 deploy launched a backfill job that updates loyalty_tier across the whole orders table inside one long-running, uncommitted transaction, holding row locks that block every normal order-write transaction.",
+    supportingEvidenceIds: ["oc_backfill_deploy", "oc_blocking_chain", "oc_cpu_mem_flat"],
+    remediation: "Kill/pause the backfill job and rewrite it to run in small batches with commits and explicit lock timeouts.",
+  },
+  "memory-leak": {
+    rootCause:
+      "The v3.4.0 deploy added an in-process cache keyed by a fresh per-request ID instead of user ID, so cache entries are never reused or evicted and pod memory grows without bound until Kubernetes OOM-kills each pod.",
+    supportingEvidenceIds: ["reco_deploy_note", "reco_cache_growth", "reco_cpu_mem_sawtooth"],
+    remediation: "Roll back or feature-flag off the cache; fix it to key on userId with a bounded LRU eviction policy.",
+  },
+};
 
 interface BotIdentity {
   name: string;
@@ -128,8 +153,12 @@ async function main() {
       log(`${bot.name} assigned role`, bot.role, "tools:", (bot.tools ?? []).map((t) => t.id).join(","));
     }),
   );
-  const { gameId } = await emitAck<{ gameId: string }>(host.socket!, "game:start", { durationPreset: "instant" });
-  log("game started", gameId);
+  const { gameId } = await emitAck<{ gameId: string }>(host.socket!, "game:start", {
+    durationPreset: "instant",
+    scenarioId: SCENARIO_ID,
+    difficulty: DIFFICULTY,
+  });
+  log("game started", gameId, "scenario:", SCENARIO_ID, "difficulty:", DIFFICULTY);
   await Promise.all(snapshotPromises);
 
   const investigators = bots.filter((b) => b.tools && b.tools.length > 0);
@@ -184,11 +213,10 @@ async function main() {
   // arriving before (or interleaved with) the ack packet itself.
   const finalPromise = waitForEvent<any>(submitter.socket!, "final:evaluated", () => true, 20000);
   const completedPromise = waitForEvent(submitter.socket!, "game:completed", () => true, 20000);
+  const finalSubmission = FINAL_SUBMISSIONS[SCENARIO_ID];
+  if (!finalSubmission) throw new Error(`No FINAL_SUBMISSIONS entry for scenario ${SCENARIO_ID}`);
   await emitAck(submitter.socket!, "final:submit", {
-    rootCause:
-      "The v2.14.0 deploy added a per-item loyalty_history lookup causing N+1 query volume, which saturated the fixed 20-connection database pool and caused request timeouts.",
-    supportingEvidenceIds: ["be_deploy_log", "db_pool_saturation", "sre_cpu_mem_flat"],
-    remediation: "Batch the loyalty_history lookup into a single query per cart and roll back if needed while it's fixed.",
+    ...finalSubmission,
     clientMsgId: crypto.randomUUID(),
   });
   const debrief = await finalPromise;

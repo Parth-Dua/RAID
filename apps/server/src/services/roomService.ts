@@ -1,5 +1,5 @@
-import { generateRoomCode, ROLES, type Role } from "@raid/shared";
-import { assertTransition } from "@raid/game-engine";
+import { generateRoomCode, ROLES, type Difficulty, type Role } from "@raid/shared";
+import { assertTransition, listScenarioIds } from "@raid/game-engine";
 import type { Database } from "../db/client.js";
 import { RaidError } from "../domain/errors.js";
 import { generateSessionToken } from "../domain/session.js";
@@ -13,7 +13,7 @@ import { logger } from "../logger.js";
 
 const MIN_PLAYERS_TO_START = 3;
 const MAX_PLAYERS_TO_START = 4;
-const SCENARIO_ID = "checkout-degradation";
+const DEFAULT_SCENARIO_ID = "checkout-degradation";
 
 export interface CreatedIdentity {
   playerId: string;
@@ -73,11 +73,16 @@ export async function getRoomSnapshot(db: Database, roomId: string) {
   if (!room) throw new RaidError("ROOM_NOT_FOUND", "Room not found");
   const players = await playersRepo.findPlayersInRoom(db, roomId);
   let roleMap = new Map<string, Role>();
+  let scenarioId: string | null = null;
   if (room.currentGameId) {
-    const gamePlayers = await gamesRepo.findGamePlayers(db, room.currentGameId);
+    const [gamePlayers, gameRow] = await Promise.all([
+      gamesRepo.findGamePlayers(db, room.currentGameId),
+      gamesRepo.findGameById(db, room.currentGameId),
+    ]);
     roleMap = roleMapFromGamePlayers(gamePlayers);
+    scenarioId = gameRow?.scenarioId ?? null;
   }
-  return toRoomSnapshot(room, players, roleMap);
+  return toRoomSnapshot(room, players, roleMap, scenarioId);
 }
 
 export async function setPlayerReady(db: Database, roomId: string, playerId: string, ready: boolean) {
@@ -134,6 +139,7 @@ export async function leaveRoom(db: Database, roomId: string, playerId: string):
 export interface StartGameResult {
   gameId: string;
   scenarioId: string;
+  difficulty: Difficulty;
   durationSeconds: number;
   startedAtMs: number;
   endsAtMs: number;
@@ -147,17 +153,23 @@ export interface StartGameResult {
  * concurrency (rooms.version) so a double Start-button click race resolves
  * safely: the second caller's UPDATE affects 0 rows and gets ALREADY_STARTED
  * instead of creating a second game.
+ *
+ * scenarioId/difficulty are host choices (V0.3.1); an unknown scenarioId is rejected rather
+ * than silently falling back, so a stale client can't start a scenario the server doesn't know.
  */
 export async function startGame(
   db: Database,
   roomId: string,
   requestingPlayerId: string,
   durationPreset: DurationPreset = "standard",
+  scenarioId: string = DEFAULT_SCENARIO_ID,
+  difficulty: Difficulty = "NORMAL",
 ): Promise<StartGameResult> {
   const room = await roomsRepo.findRoomById(db, roomId);
   if (!room) throw new RaidError("ROOM_NOT_FOUND", "Room not found");
   if (room.hostPlayerId !== requestingPlayerId) throw new RaidError("NOT_HOST", "Only the host can start the game");
   if (room.phase !== "LOBBY") throw new RaidError("ALREADY_STARTED", "Game has already started");
+  if (!listScenarioIds().includes(scenarioId)) throw new RaidError("INVALID_PAYLOAD", `Unknown scenario: ${scenarioId}`);
 
   // Only players actually present can start or block a start: a player who joined via REST but
   // never opened a socket (or disconnected in the lobby) must not be able to hold the room hostage
@@ -183,7 +195,7 @@ export async function startGame(
   const durationSeconds = DURATION_PRESETS[durationPreset];
   const startedAt = new Date();
   const endsAt = new Date(startedAt.getTime() + durationSeconds * 1000);
-  const game = await gamesRepo.insertGame(db, { roomId, scenarioId: SCENARIO_ID, durationSeconds, startedAt, endsAt });
+  const game = await gamesRepo.insertGame(db, { roomId, scenarioId, difficulty, durationSeconds, startedAt, endsAt });
 
   const roleByPlayerId = assignRoles(players.map((p) => p.id));
   await gamesRepo.insertGamePlayers(
@@ -202,7 +214,7 @@ export async function startGame(
     roomId,
     gameId: game.id,
     type: "GAME_STARTED",
-    payload: { scenarioId: SCENARIO_ID, durationSeconds, playerCount: players.length },
+    payload: { scenarioId, difficulty, durationSeconds, playerCount: players.length },
   });
   for (const [playerId, role] of roleByPlayerId) {
     await appendEvent(db, { roomId, gameId: game.id, type: "ROLE_ASSIGNED", payload: { playerId, role }, actorPlayerId: playerId });
@@ -210,12 +222,41 @@ export async function startGame(
 
   return {
     gameId: game.id,
-    scenarioId: SCENARIO_ID,
+    scenarioId,
+    difficulty,
     durationSeconds,
     startedAtMs: startedAt.getTime(),
     endsAtMs: endsAt.getTime(),
     roleByPlayerId,
   };
+}
+
+/**
+ * Rematch: host-only, only legal once the room is COMPLETED. Resets the room back to LOBBY with
+ * `currentGameId` cleared and every player's ready flag reset, reusing the same room code/invite
+ * link (V0.3.5) instead of forcing everyone to leave and rejoin a fresh room. The completed game
+ * row itself is left untouched (debrief history stays queryable) - only the room pointer moves.
+ * Uses the same optimistic-concurrency guard as startGame so a double rematch-click race can't
+ * both succeed. `game:snapshot` payloads carry `gameId` and clients discard events whose gameId
+ * doesn't match their current game, so any final tick from the old game's clock/AI callbacks that
+ * arrives after rematch is a no-op rather than corrupting the new game's state.
+ */
+export async function rematchRoom(db: Database, roomId: string, requestingPlayerId: string): Promise<void> {
+  const room = await roomsRepo.findRoomById(db, roomId);
+  if (!room) throw new RaidError("ROOM_NOT_FOUND", "Room not found");
+  if (room.hostPlayerId !== requestingPlayerId) throw new RaidError("NOT_HOST", "Only the host can start a rematch");
+  if (room.phase !== "COMPLETED") throw new RaidError("INVALID_PHASE", "Rematch is only available once the incident is complete");
+
+  assertTransition("COMPLETED", "LOBBY");
+  const lobbyRoom = await roomsRepo.tryTransitionRoomPhase(db, roomId, "COMPLETED", room.version, "LOBBY", { currentGameId: null });
+  if (!lobbyRoom) throw new RaidError("ALREADY_STARTED", "Rematch was already started");
+
+  const players = await playersRepo.findPlayersInRoom(db, roomId);
+  for (const player of players) {
+    await playersRepo.setPlayerReady(db, player.id, false);
+  }
+
+  await appendEvent(db, { roomId, type: "ROOM_REMATCH", payload: { playerCount: players.length }, actorPlayerId: requestingPlayerId });
 }
 
 function assignRoles(playerIds: string[]): Map<string, Role> {

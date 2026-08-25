@@ -15,6 +15,8 @@ require live-integration evidence mocks can't provide.
 | Phase | Live requests | Est. input tokens | Est. output tokens | Est. cost | Cumulative |
 |---|---|---|---|---|---|
 | V0.1 (prior session) | 3 (all failed at network layer — sandbox egress blocked `api.deepseek.com`) | 0 (never reached the model) | 0 | $0.00 | $0.00 |
+| V0.2 | 0 (mock only) | 0 | 0 | $0.00 | $0.00 |
+| V0.3 | 0 (mock only) | 0 | 0 | $0.00 | $0.00 |
 
 Running total: **$0.00 of $8.00**.
 
@@ -110,4 +112,123 @@ play.
 
 ---
 
-(V0.3 onward recorded below as each phase completes.)
+## V0.3 — Multiple scenarios + replayability
+
+**Goal**: ship at least 3 meaningfully different incident scenarios with a difficulty system that
+changes real reasoning complexity (not just the clock), generalize the scenario engine so scenario
+differences are data/rule-driven rather than scattered `if (scenario.id === ...)` branching, and add
+low-friction replayability (play again, pick a new scenario, fresh randomized roles, clean reset) with
+no accounts system.
+
+**What changed**:
+- **3 scenarios**, each a genuinely different failure mechanism: `checkout-degradation` (existing,
+  query-volume-driven pool exhaustion), `lock-contention` / "Order Processing Stall" (new — a
+  long-held-transaction lock blocking writes; deliberately produces the *same* "pool looks full"
+  surface symptom as checkout-degradation for a *different* underlying reason, so a team can't just
+  pattern-match the previous scenario's answer), `memory-leak` / "Recommendation Service Crash Loop"
+  (new — unbounded in-process cache growth → OOM-kill/restart cycle → intermittent, cyclical 503s).
+  Each has its own 15-17 tools, 14-17 evidence items, 5 red herrings, 6-7 causal-chain steps, and 5
+  plausible-wrong-hypotheses. See `docs/GAME_DESIGN.md` "Scenarios" for full per-scenario detail.
+- **Difficulty (NORMAL/HARD)**, implemented as exactly one generic transform
+  (`applyDifficulty()` in `packages/game-engine/src/difficulty.ts`) applied uniformly to whatever
+  scenario is selected — no scenario module contains difficulty logic. NORMAL appends each evidence
+  item's authored interpretive `hint` to its raw content; HARD withholds the hint (same raw data, no
+  steer) and pushes time-gated evidence unlock thresholds later (×1.35, capped at 95% of duration).
+  This is a real reasoning-complexity change, not a timer adjustment — see ADR-020.
+- **Scenario engine generalization**: `SCENARIO_REGISTRY` (a plain id → builder map) is the single
+  place scenario identity is switched on; `buildScenario(scenarioId, durationSeconds, difficulty)` is
+  the only call site product code uses. A new `GET /api/scenarios` REST endpoint serves the catalog
+  (id, title, severity, briefing, tagline) for the lobby's picker UI.
+- **Host-side selection**: the lobby's host-only panel gained a scenario picker and a NORMAL/HARD
+  toggle alongside the existing duration picker; the choice flows through `game:start`'s payload
+  (`scenarioId?`, `difficulty?`, both optional with server-side defaults) to `roomService.startGame`,
+  which rejects an unknown `scenarioId` with `INVALID_PAYLOAD` rather than silently falling back.
+- **Replayability / rematch**: the state machine gained exactly one new transition,
+  `COMPLETED → LOBBY` (ADR-021), reachable only via a new host-only `game:rematch` socket event. It
+  resets the room to LOBBY (same room code/players, `currentGameId` cleared), resets every player's
+  ready flag, and leaves the completed game's own row untouched. The existing LOBBY→STARTING→ACTIVE
+  path (fresh role shuffle, host's newly-chosen scenario/difficulty) runs unchanged from there — no
+  new "start a rematch" code path was needed. Debrief screen gained a "Play again with this group"
+  button (host-only) and a waiting message for everyone else.
+- **No state leakage across rematch**, defense in depth at two layers: server-side, every game-scoped
+  socket handler resolves "the active game" via `room.currentGameId` (now `null` post-rematch), so a
+  stale action against the old game is rejected with `INVALID_PHASE` rather than silently acting on it;
+  client-side, `GameProvider` tracks the room's current `gameId` and drops any `game:snapshot` naming a
+  different one, and clears local game/debrief state the instant a `room:snapshot` reports a
+  gameId-less LOBBY.
+- Two pre-existing gaps found and fixed as part of this work (not new regressions, but exposed by
+  actually wiring scenario selection end-to-end): `RoomSnapshot.scenarioId` had been hardcoded to
+  `null` since V0.1 and was never actually populated; `roomsRepo.tryTransitionRoomPhase`'s `extra`
+  param used truthiness (`extra?.currentGameId ? … : {}`) to decide whether to update
+  `currentGameId`, which silently could never clear it to `null` — both fixed (`getRoomSnapshot` now
+  fetches the current game's row; the repo function now checks `"currentGameId" in extra"` instead of
+  truthiness).
+- `bots` script (`apps/server/src/scripts/botSimulation.ts`) now accepts `RAID_SCENARIO_ID` /
+  `RAID_DIFFICULTY` env vars and a per-scenario `FINAL_SUBMISSIONS` map, so the same script drives any
+  of the 3 scenarios at either difficulty instead of being hardcoded to checkout-degradation.
+- `evaluateScenarioQuality`'s 14 automated checks now run against all 3 scenarios × both difficulties ×
+  all 3 duration presets (18 combinations) via `describe.each`/`it.each` in `scenarioValidation.test.ts`,
+  rather than one scenario at one duration.
+
+**Acceptance conditions**:
+- PASS at least 3 meaningfully different scenarios shipped — 3 distinct failure mechanisms, verified structurally distinct (different tool/evidence ids, different "what rules out the wrong answer" logic) and via live bot runs of all 3
+- PASS difficulty changes real reasoning complexity, not just the clock — `difficulty.test.ts` asserts hint withholding + later unlock thresholds; both properties independently verified
+- PASS scenario engine is data/rule-driven, not `if (scenario.id === ...)`-scattered — `SCENARIO_REGISTRY` is the only scenario-id switch point in product logic; verified by inspection and by the fact that adding scenario #3 required zero changes to `roomService`, `gameService`, `gameLoader`, or any socket handler
+- PASS host can select scenario + difficulty in the lobby — real browser verification (Playwright), host picks "Order Processing Stall" + HARD, confirmed in the started game's content
+- PASS unknown scenario selection is rejected, not silently substituted — `INVALID_PAYLOAD`, covered by a dedicated test
+- PASS every scenario independently passes the automated structural quality checklist — 18/18 scenario×difficulty×duration combinations pass all 14 checks
+- PASS replayability: play again with the same group — `game:rematch`, host-only, COMPLETED-only, verified server-side and in a real browser (submit → debrief → rematch → clean lobby)
+- PASS replayability: new scenario/roles on rematch — rematch returns to LOBBY where the host can pick a different scenario; roles are freshly (re-)assigned by the same shuffle every game start uses
+- PASS no accounts system introduced — rematch is purely a room-state reset; no user/session persistence beyond the existing per-room player cookie
+- PASS no state leakage from the old game into the new one — two-layer guard (server `currentGameId`-null rejection + client gameId-mismatch drop), covered by a dedicated adversarial test (stale `final:submit` after rematch rejected with `INVALID_PHASE`) and an end-to-end rematch test asserting the new room's REST snapshot reflects only the new game
+- PASS existing tests remain green — all 48 pre-V0.3 server tests + all pre-V0.3 game-engine tests still pass
+- PASS new behavior has real test coverage — 11 new server tests (`v0.3.test.ts`), 1 new game-engine test file (`difficulty.test.ts`, 18 tests) plus generalized `scenarioValidation.test.ts` and 2 new `stateMachine.test.ts` cases
+- PASS docs updated — `docs/GAME_DESIGN.md` (all 3 scenarios, difficulty, replayability sections), `docs/DECISIONS.md` (ADR-020, ADR-021), `docs/WEBSOCKET_PROTOCOL.md` (`game:rematch`, `game:start` payload changes, plus filling in two pre-existing V0.2 documentation gaps found while updating this file), `docs/DATABASE.md` (new `difficulty` column), `docs/TESTING.md` (new test file, bot script env vars)
+
+**Tests run**: `packages/game-engine` 50/50 (`scoring` 5, `scenarioEngine` 7, `scenarioValidation` 12 —
+was 2, now parameterized across 3 scenarios × 2 difficulties × 3 durations, `stateMachine` 8 — was 6,
++2 for the new `COMPLETED→LOBBY` transition, `difficulty` 18 — new file). `apps/server` 48/48 (was 37,
++11 in new `v0.3.test.ts`). `packages/ai` unaffected, not re-run (no AI-layer changes this phase). Root
+`pnpm run build` / `pnpm run typecheck` / `pnpm run lint` all clean across all 5 workspace packages.
+
+**Runtime verification**: `pnpm bots` run live against all 6 scenario×difficulty combinations
+(`checkout-degradation`/`lock-contention`/`memory-leak` × `NORMAL`/`HARD`) — all 6 completed the full
+room-creation-to-scored-debrief loop with `AI_PROVIDER=mock`, no errors. Real Chromium (Playwright,
+separate browser contexts per player) end-to-end run: 3 real player joins → host selects "Order
+Processing Stall" + HARD + demo duration → all ready → start → lock-contention-specific content
+confirmed rendered (not checkout-degradation's) → final diagnosis submitted → debrief screen with real
+score rendered → host clicks "Play again with this group" → room returns to a clean LOBBY with the
+scenario picker visible again and **zero leaked debrief content** from the previous round, confirmed by
+asserting the old score text is absent from the post-rematch page.
+
+**DeepSeek calls made this phase**: 0 (mock only; no AI-layer changes in V0.3 — scoring/hypothesis
+evaluation logic is unchanged, only which scenario/difficulty feeds into it).
+
+**Approximate spend this phase**: $0.00. Cumulative: **$0.00 of $8.00**.
+
+**Bugs found**: two pre-existing (V0.1-era) gaps surfaced while wiring scenario selection end-to-end,
+both fixed this phase (see "What changed" above): `RoomSnapshot.scenarioId` had been hardcoded `null`
+since V0.1 (never actually read from the game row), and `tryTransitionRoomPhase`'s optimistic
+`currentGameId` update used truthiness instead of presence, which meant it could never actually clear
+`currentGameId` back to `null` — a latent bug that would have made rematch's LOBBY reset silently
+useless (the room would have kept pointing at the old completed game) had it not been caught by the
+first rematch test run.
+
+**Architecture changes**: `applyDifficulty()` is a new, deliberately narrow single-responsibility
+module — difficulty logic now exists in exactly one place regardless of how many scenarios or future
+difficulty levels exist (ADR-020). The `COMPLETED → LOBBY` state machine transition (ADR-021) is the
+first crack in what was previously a fully-terminal completion state; `ABANDONED` remains fully
+terminal by deliberate contrast. No new packages, no new cross-package coupling — scenario/difficulty
+selection flows through the same `game:start` payload and `roomService.startGame` call path that
+already existed, just with two new optional fields.
+
+**Known remaining limitations**: difficulty currently varies clue legibility and unlock timing only —
+it does not vary red-herring count or causal-chain length between NORMAL/HARD for the same scenario
+(documented in `docs/GAME_DESIGN.md` as a deliberate scope boundary, with ADR-020 noting what would
+warrant revisiting it). Rematch always keeps the same room/players; there is no "leave and start a
+different rematch group" flow, which is intentional (V0.3.5 explicitly scoped out accounts) but means a
+group that wants to reshuffle membership between rounds must create a new room instead.
+
+---
+
+(V0.4 onward recorded below as each phase completes.)

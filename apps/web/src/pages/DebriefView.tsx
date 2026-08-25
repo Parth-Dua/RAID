@@ -1,8 +1,23 @@
+import { useState } from "react";
 import { useGame } from "../state/GameProvider.js";
 
 export function DebriefView({ roomCode }: { roomCode: string }) {
-  const { debrief, gameSnapshot } = useGame();
+  const { debrief, gameSnapshot, roomSnapshot, myPlayerId, actions } = useGame();
   const d = debrief ?? gameSnapshot?.debrief ?? null;
+  const [rematching, setRematching] = useState(false);
+  const isHost = roomSnapshot?.players.find((p) => p.id === myPlayerId)?.isHost ?? false;
+
+  async function playAgain() {
+    setRematching(true);
+    try {
+      await actions.rematch();
+      // On success the room flips to LOBBY and RoomShell swaps this view out; on failure
+      // (e.g. NOT_HOST from a stale click) the guarded action surfaces a toast and we just
+      // stop spinning here rather than getting stuck.
+    } finally {
+      setRematching(false);
+    }
+  }
 
   if (!d) {
     return <div className="flex-1 min-h-screen flex items-center justify-center text-ink-300 text-sm">Finalizing debrief...</div>;
@@ -77,7 +92,18 @@ export function DebriefView({ roomCode }: { roomCode: string }) {
           </ul>
         </Card>
 
-        <div className="text-center pt-4">
+        <div className="text-center pt-4 flex flex-col items-center gap-3">
+          {isHost ? (
+            <button
+              onClick={playAgain}
+              disabled={rematching}
+              className="bg-accent hover:bg-accent/90 disabled:opacity-50 text-white text-sm font-semibold px-6 py-2.5 rounded-md transition-colors"
+            >
+              {rematching ? "Starting rematch..." : "Play again with this group"}
+            </button>
+          ) : (
+            <div className="text-xs text-ink-400">Waiting for the host to start a rematch, or leave to start your own room.</div>
+          )}
           <a href="/" className="text-accent text-sm hover:underline">
             Back to home
           </a>

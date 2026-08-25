@@ -1,0 +1,1 @@
+ALTER TABLE "games" ADD COLUMN "difficulty" varchar(10) DEFAULT 'NORMAL' NOT NULL;

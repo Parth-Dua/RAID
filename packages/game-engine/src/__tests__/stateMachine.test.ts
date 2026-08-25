@@ -21,9 +21,20 @@ describe("game phase state machine", () => {
     expect(canTransition("LOBBY", "COMPLETED")).toBe(false);
   });
 
-  it("rejects transitions out of terminal states", () => {
+  it("rejects transitions out of terminal states other than the rematch exception", () => {
     expect(canTransition("COMPLETED", "ACTIVE")).toBe(false);
+    expect(canTransition("COMPLETED", "STARTING")).toBe(false);
+    expect(canTransition("COMPLETED", "FINALIZING")).toBe(false);
     expect(canTransition("ABANDONED", "LOBBY")).toBe(false);
+  });
+
+  it("allows a completed room to reset back to LOBBY for a rematch (V0.3.5)", () => {
+    expect(canTransition("COMPLETED", "LOBBY")).toBe(true);
+  });
+
+  it("ABANDONED stays fully terminal - even rematch is not allowed from it", () => {
+    expect(canTransition("ABANDONED", "LOBBY")).toBe(false);
+    expect(canTransition("ABANDONED", "ACTIVE")).toBe(false);
   });
 
   it("double-start (LOBBY -> STARTING -> STARTING) is rejected", () => {

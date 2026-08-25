@@ -12,6 +12,7 @@ import {
   KnownFactAddPayload,
   PlayerLeavePayload,
   PlayerReadyPayload,
+  RematchPayload,
   ToolExecutePayload,
 } from "@raid/shared";
 import { db } from "../db/client.js";
@@ -51,6 +52,7 @@ export function registerSocketHandlers(io: Server): void {
     socket.on("player:ready", withHandler(io, socket, "player:ready", PlayerReadyPayload, onPlayerReady));
     socket.on("player:leave", withHandler(io, socket, "player:leave", PlayerLeavePayload, onPlayerLeave));
     socket.on("game:start", withHandler(io, socket, "game:start", GameStartPayload, onGameStart));
+    socket.on("game:rematch", withHandler(io, socket, "game:rematch", RematchPayload, onGameRematch));
     socket.on("chat:send", withHandler(io, socket, "chat:send", ChatSendPayload, onChatSend));
     socket.on("tool:execute", withHandler(io, socket, "tool:execute", ToolExecutePayload, onToolExecute));
     socket.on("hypothesis:create", withHandler(io, socket, "hypothesis:create", HypothesisCreatePayload, onHypothesisCreate));
@@ -152,14 +154,29 @@ const onPlayerLeave: Handler<Record<string, never>> = async (io, socket) => {
   // dropped the player row, so there's nothing further for this socket to be authorized to do.
 };
 
-const onGameStart: Handler<{ durationPreset?: "standard" | "demo" | "instant" }> = async (io, socket, payload) => {
+const onGameStart: Handler<{ durationPreset?: "standard" | "demo" | "instant"; scenarioId?: string; difficulty?: "NORMAL" | "HARD" }> =
+  async (io, socket, payload) => {
+    const { playerId, roomId } = socketData(socket);
+    const result = await roomService.startGame(
+      db,
+      roomId,
+      playerId,
+      payload.durationPreset ?? "standard",
+      payload.scenarioId,
+      payload.difficulty,
+    );
+    const snapshot = await roomService.getRoomSnapshot(db, roomId);
+    emitRoomSnapshot(io, roomId, snapshot);
+    await emitGameSnapshotToRoom(io, db, roomId, result.gameId);
+    startClock(io, db, roomId, result.gameId);
+    return { gameId: result.gameId };
+  };
+
+const onGameRematch: Handler<Record<string, never>> = async (io, socket) => {
   const { playerId, roomId } = socketData(socket);
-  const result = await roomService.startGame(db, roomId, playerId, payload.durationPreset ?? "standard");
+  await roomService.rematchRoom(db, roomId, playerId);
   const snapshot = await roomService.getRoomSnapshot(db, roomId);
   emitRoomSnapshot(io, roomId, snapshot);
-  await emitGameSnapshotToRoom(io, db, roomId, result.gameId);
-  startClock(io, db, roomId, result.gameId);
-  return { gameId: result.gameId };
 };
 
 const onChatSend: Handler<{ text: string; clientMsgId: string }> = async (io, socket, payload) => {

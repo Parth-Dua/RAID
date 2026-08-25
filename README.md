@@ -7,7 +7,7 @@ RAID is a real-time multiplayer AI incident-response simulator where engineers w
 - **Asymmetric information** — each player sees a different role's logs, metrics, and tools; no single player ever has enough evidence to solve the incident alone.
 - **Collaborative debugging under pressure** — a server-authoritative clock and evidence that unlocks over time force the team to communicate, not just individually click through a checklist.
 - **AI that reasons about the team, not one player** — DeepSeek evaluates hypotheses and the final diagnosis against what the *group* has collectively surfaced, never a single private chat transcript.
-- **A realistic engineering incident** — the shipping scenario (N+1 query → DB connection-pool saturation → 5xx errors) is the kind of postmortem a real backend/SRE team would recognize, not a puzzle-box abstraction.
+- **Realistic engineering incidents** — 3 shipping scenarios (N+1 query → connection-pool saturation; a long-held lock blocking writes; an unbounded in-process cache → OOM-kill crash loop), each the kind of postmortem a real backend/SRE team would recognize, not a puzzle-box abstraction.
 - **Server-authoritative multiplayer** — every mutation is re-validated against the database on every request; clients propose, the server decides.
 
 ## Demo
@@ -147,9 +147,9 @@ docker/              Local Postgres + production Dockerfiles
 ## Roadmap
 
 ```
-V0.1 — Core multiplayer incident simulator
-V0.2 — Playability + role balance
-V0.3 — Scenario expansion + replayability
+V0.1 — Core multiplayer incident simulator    [shipped]
+V0.2 — Playability + role balance             [shipped]
+V0.3 — Scenario expansion + replayability      [shipped]
 V0.4 — Adaptive multiplayer AI
 V0.5 — AI-assisted scenario generation
 V0.6 — Social + replay layer
@@ -159,8 +159,9 @@ Current status and per-version acceptance results: [`docs/MILESTONES.md`](docs/M
 
 ## Known limitations
 
-- No explicit "leave room" or host-kick action for a mid-lobby player.
+- No host-kick action for a mid-lobby player (a player can leave voluntarily; a host cannot remove someone else).
 - One browser tab holds one identity at a time (a deliberate anonymous-session tradeoff).
+- Difficulty (NORMAL/HARD) varies clue legibility and unlock timing, not red-herring count or causal-chain length.
 - No horizontal scaling built (single process) — the path is documented, not implemented.
 - No automated frontend test suite — covered by server-side integration tests against the same API surface plus scripted multi-session browser testing.
 - No CI pipeline — test commands are run by hand.

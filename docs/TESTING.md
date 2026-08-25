@@ -62,16 +62,30 @@ attempt succeeds).
   a reconnecting player keeps their identity/role/previously-unlocked evidence; a host disconnecting
   in the lobby transfers host to another connected player; the timer genuinely auto-finalizes a game
   with no submission once the clock runs out.
+- `v0.3.test.ts` (V0.3) — the scenario catalog endpoint lists all 3 scenarios; a host's chosen
+  scenario/difficulty is recorded and reflected back to every player; an unknown `scenarioId` is
+  rejected with `INVALID_PAYLOAD` rather than silently falling back; each scenario actually produces
+  its own distinct tools/evidence (not checkout-degradation's); a HARD game still runs end-to-end;
+  rematch resets a COMPLETED room to LOBBY and every player's ready state; only the host can rematch;
+  rematch is rejected outside COMPLETED; a full rematch → new scenario → new game cycle produces a
+  fresh `gameId` and fresh role assignment with zero leakage from the old game; a stale `final:submit`
+  fired against an already-rematched room is rejected rather than corrupting the new LOBBY room.
 
 **System-level (`apps/server/src/scripts/botSimulation.ts`)**: not a vitest suite — a standalone
 script that drives 4 real `socket.io-client` connections through the *actual* REST + Socket.IO API
 (no test-only shortcuts) from room creation to a scored debrief, including two tool-execution passes
-that prove time-gated evidence really does stay hidden until its threshold and then appear. Run it
-against a live dev server:
+that prove time-gated evidence really does stay hidden until its threshold and then appear. Since V0.3
+it accepts `RAID_SCENARIO_ID` and `RAID_DIFFICULTY` env vars (defaulting to `checkout-degradation` /
+`NORMAL`) so the same script exercises any of the 3 scenarios at either difficulty — its
+`FINAL_SUBMISSIONS` map holds the matching root-cause/remediation text per scenario id. Run it against
+a live dev server:
 
 ```bash
 pnpm dev            # or just the server: pnpm --filter @raid/server dev
 pnpm bots            # apps/server: pnpm exec tsx src/scripts/botSimulation.ts
+
+# or target a specific scenario/difficulty:
+RAID_SCENARIO_ID=lock-contention RAID_DIFFICULTY=HARD pnpm bots
 ```
 
 This is the regression tool referenced by the spec's "system test / bot players" requirement, and it
@@ -86,6 +100,12 @@ start → tool execution with a real result rendered in the DOM → chat → hyp
 submission → a fully rendered debrief screen with the real score breakdown. Screenshots from that run
 are not committed to the repo (they were scratch verification artifacts), but the flow is exactly what
 `docs/GAME_DESIGN.md`'s game loop describes and what the bot script exercises server-side.
+
+V0.3 added the same style of browser verification for the lobby's scenario/difficulty picker (host
+selects Order Processing Stall + HARD, confirms scenario-specific content renders after start, not
+checkout-degradation's) and for rematch (submit final answer → debrief renders → host clicks "Play
+again with this group" → room returns to a clean LOBBY with the scenario picker visible again and no
+leftover debrief content from the previous round).
 
 ## Failure-mode tests specifically (spec section 34 "Failure tests")
 

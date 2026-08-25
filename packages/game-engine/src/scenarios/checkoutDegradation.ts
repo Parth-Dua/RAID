@@ -192,9 +192,10 @@ const EVIDENCE: FractionalEvidence[] = [
       "  db.query SELECT loyalty_history WHERE user_id=? AND item_id=?   622ms (pool wait 601ms)\n" +
       "  db.query SELECT loyalty_history WHERE user_id=? AND item_id=?   588ms (pool wait 561ms)\n" +
       "  payment.charge               41ms\n" +
-      "  order.create                 14ms\n" +
-      "  Note: 6 near-identical loyalty_history spans, one per cart line item (cart had 6 items).\n" +
-      "  Almost all span time is 'pool wait', not query execution.",
+      "  order.create                 14ms",
+    hint:
+      "6 near-identical loyalty_history spans, one per cart line item (cart had 6 items). Almost all " +
+      "span time is 'pool wait', not query execution.",
     unlock: { toolId: "distributed_traces", atFraction: 0.12 },
     isRedHerring: false,
     isKeyEvidence: true,
@@ -223,8 +224,8 @@ const EVIDENCE: FractionalEvidence[] = [
       "POST /checkout      p50=2.1s p95=4.3s p99=6.8s  5xx-rate=9.4%   (baseline p50=210ms, 5xx-rate=0.1%)\n" +
       "GET  /catalog       p50=48ms p95=110ms p99=180ms 5xx-rate=0.05%  (unchanged from baseline)\n" +
       "GET  /cart          p50=61ms p95=140ms p99=210ms 5xx-rate=0.06%  (unchanged from baseline)\n" +
-      "POST /login         p50=90ms p95=160ms p99=240ms 5xx-rate=0.03%  (unchanged from baseline)\n" +
-      "  Only checkout is degraded; every other endpoint is within normal range.",
+      "POST /login         p50=90ms p95=160ms p99=240ms 5xx-rate=0.03%  (unchanged from baseline)",
+    hint: "Only checkout is degraded; every other endpoint is within normal range.",
     unlock: { toolId: "endpoint_stats" },
     isRedHerring: false,
     isKeyEvidence: false,
@@ -236,8 +237,8 @@ const EVIDENCE: FractionalEvidence[] = [
     category: "metric",
     content:
       "Outbound calls to payment-provider: p95=180ms, error-rate=0.02%, no timeouts.\n" +
-      "Payment provider status page: all systems operational.\n" +
-      "  The external payment dependency is not implicated.",
+      "Payment provider status page: all systems operational.",
+    hint: "The external payment dependency is not implicated.",
     unlock: { toolId: "payment_dependency" },
     isRedHerring: true,
     isKeyEvidence: false,
@@ -255,8 +256,8 @@ const EVIDENCE: FractionalEvidence[] = [
       "  14:04  in-use=12  queued=0\n" +
       "  14:07  in-use=19  queued=3\n" +
       "  14:10  in-use=20  queued=14\n" +
-      "  14:13  in-use=20  queued=27\n" +
-      "  Pool has been fully saturated (20/20) with a growing wait queue since ~14:10.",
+      "  14:13  in-use=20  queued=27",
+    hint: "Pool has been fully saturated (20/20) with a growing wait queue since ~14:10.",
     unlock: { toolId: "active_connections", atFraction: 0.15 },
     isRedHerring: false,
     isKeyEvidence: true,
@@ -271,8 +272,8 @@ const EVIDENCE: FractionalEvidence[] = [
       "  SELECT * FROM loyalty_history WHERE user_id=$1 AND item_id=$2   3,820 calls/min  mean=8ms\n" +
       "  SELECT * FROM cart_items WHERE cart_id=$1                        410 calls/min  mean=3ms\n" +
       "  SELECT * FROM users WHERE id=$1                                  395 calls/min  mean=2ms\n" +
-      "  Prior 24h baseline for loyalty_history: ~480 calls/min.\n" +
-      "  Note: each individual loyalty_history query is fast (8ms) — this is a volume problem, not a slow-query problem.",
+      "  Prior 24h baseline for loyalty_history: ~480 calls/min.",
+    hint: "Each individual loyalty_history query is fast (8ms) — this is a volume problem, not a slow-query problem.",
     unlock: { toolId: "query_stats", atFraction: 0.18 },
     isRedHerring: false,
     isKeyEvidence: true,
@@ -283,8 +284,8 @@ const EVIDENCE: FractionalEvidence[] = [
     title: "Slow query log: empty",
     category: "metric",
     content:
-      "No queries exceeding the 200ms slow-query threshold in the last 15 minutes.\n" +
-      "  Every individual query is fast; the problem is not query execution time.",
+      "No queries exceeding the 200ms slow-query threshold in the last 15 minutes.",
+    hint: "Every individual query is fast; the problem is not query execution time.",
     unlock: { toolId: "slow_query_log" },
     isRedHerring: true,
     isKeyEvidence: false,
@@ -333,8 +334,8 @@ const EVIDENCE: FractionalEvidence[] = [
       "  14:00  CPU=22%  MEM=41%\n" +
       "  14:05  CPU=24%  MEM=42%\n" +
       "  14:10  CPU=26%  MEM=43%\n" +
-      "  14:13  CPU=25%  MEM=43%\n" +
-      "  No CPU or memory pressure at any point. Pods are mostly idle, waiting on I/O.",
+      "  14:13  CPU=25%  MEM=43%",
+    hint: "No CPU or memory pressure at any point. Pods are mostly idle, waiting on I/O.",
     unlock: { toolId: "cpu_memory", atFraction: 0.1 },
     isRedHerring: false,
     isKeyEvidence: true,
@@ -346,7 +347,8 @@ const EVIDENCE: FractionalEvidence[] = [
     category: "metric",
     content:
       "checkout-service inbound rate: 148 req/min at 14:00, 152 req/min at 14:13.\n" +
-      "  24h baseline for this time of day: 140-160 req/min. This is a completely normal traffic level.",
+      "  24h baseline for this time of day: 140-160 req/min.",
+    hint: "This is a completely normal traffic level.",
     unlock: { toolId: "request_rate" },
     isRedHerring: false,
     isKeyEvidence: true,
@@ -378,8 +380,8 @@ const EVIDENCE: FractionalEvidence[] = [
     category: "deployment",
     content:
       "14:02:14  DEPLOY checkout-service v2.14.0 rolled out (6/6 pods updated by 14:02:40)\n" +
-      "14:02:40  Autoscaler: no scaling action taken (CPU target not breached)\n" +
-      "  A deploy happened right before symptoms began, but infra-level metrics alone don't show what changed in the code.",
+      "14:02:40  Autoscaler: no scaling action taken (CPU target not breached)",
+    hint: "A deploy happened right before symptoms began, but infra-level metrics alone don't show what changed in the code.",
     unlock: { toolId: "infra_events" },
     isRedHerring: false,
     isKeyEvidence: false,
@@ -397,8 +399,8 @@ const EVIDENCE: FractionalEvidence[] = [
     content:
       "checkout-service: DEGRADED (elevated latency, error rate climbing)\n" +
       "checkout_db: DEGRADED (elevated latency)\n" +
-      "infra: NOMINAL (no CPU/memory/scaling alerts)\n" +
-      "  Two services are unhealthy; the underlying infrastructure itself reports no issues.",
+      "infra: NOMINAL (no CPU/memory/scaling alerts)",
+    hint: "Two services are unhealthy; the underlying infrastructure itself reports no issues.",
     unlock: { toolId: "service_status_board", atFraction: 0.1 },
     isRedHerring: false,
     isKeyEvidence: false,
@@ -427,7 +429,7 @@ const TIMELINE: FractionalTimelineStep[] = [
   { atFraction: 0.7, headline: "Error rate plateaus near 9-10%", detail: "Pool remains fully saturated with a growing wait queue." },
 ];
 
-export function buildCheckoutDegradationScenario(durationSeconds: number): ScenarioDefinition {
+export function buildCheckoutDegradationScenario(durationSeconds: number): Omit<ScenarioDefinition, "difficulty"> {
   const evidence: EvidenceDefinition[] = EVIDENCE.map((e) => ({
     ...e,
     unlock: {

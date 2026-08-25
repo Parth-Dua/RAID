@@ -435,3 +435,75 @@ connections are long-lived (a multi-minute game session), which requires a host 
 alive and reachable for that duration — a serverless/FaaS platform built around short request/response
 invocations is the wrong shape for this workload without bolting on a separate always-on WebSocket
 gateway, which the MVP has no need to build.
+
+---
+
+## ADR-020: Difficulty as a pure data/rule transform, not per-scenario branching
+
+**Context**: V0.3 needed two difficulty levels (NORMAL/HARD) that change actual reasoning
+complexity — clue clarity and unlock timing — not just the countdown clock. With 3 scenario modules
+already in the codebase (and a design goal of adding more without regression risk), the naive
+approach of writing `if (difficulty === "HARD") { ... }` branches inside each scenario file, or
+worse, authoring two full copies of every scenario, does not scale and directly contradicts V0.3.3's
+"scenario differences should be primarily data/rule-driven, not scattered `if (scenario.id === ...)`
+conditionals."
+
+**Chosen approach**: every scenario module (`checkoutDegradation.ts`, `lockContention.ts`,
+`memoryLeak.ts`) authors exactly one canonical, difficulty-neutral definition. Evidence items that
+carry an interpretive one-liner do so via an optional `hint` field, kept separate from the raw
+`content`. A single function, `applyDifficulty()` in `packages/game-engine/src/difficulty.ts`, is the
+only place difficulty logic exists: on NORMAL it appends each evidence item's `hint` to its `content`;
+on HARD it withholds the hint (raw data still shown, interpretation withheld) and pushes every
+time-gated evidence item's unlock threshold later (×1.35, capped at 95% of the game's duration).
+`buildScenario(scenarioId, durationSeconds, difficulty)` calls the scenario's builder to get the
+canonical definition, then applies this one transform — no scenario module ever imports or checks
+`difficulty` itself.
+
+**Why**: this keeps the number of authored-content copies at exactly one per scenario regardless of
+how many difficulty levels exist, makes the difficulty *rule* itself easy to test in isolation
+(`difficulty.test.ts` asserts the transform's properties directly rather than diffing two hand-authored
+scenario files against each other), and guarantees by construction that difficulty can never
+accidentally change the root cause, remediation, or key evidence — `applyDifficulty` never touches
+those fields.
+
+**What would make us reconsider**: a genuinely structural difficulty difference (not "more subtle
+clues" but "a different number of red herrings" or "a different causal chain") would need either a
+richer transform or, at that point, may be better modeled as a distinct scenario rather than a
+difficulty level of an existing one.
+
+---
+
+## ADR-021: Rematch reuses the room via a `COMPLETED -> LOBBY` transition, not a new room
+
+**Context**: V0.3.5 required replayability — playing again, optionally with a different scenario, with
+freshly randomized roles — without building an accounts system. The simplest option, "just create a
+brand-new room and have everyone rejoin," has real friction: a new invite code, a fresh join round for
+every player, and no natural place to say "we're the same group, one more round."
+
+**Chosen approach**: the state machine (`packages/game-engine/src/stateMachine.ts`) now permits exactly
+one transition out of the previously fully-terminal `COMPLETED` phase: `COMPLETED -> LOBBY`. A
+host-only `game:rematch` socket event (`roomService.rematchRoom`) performs this transition with the
+same optimistic-concurrency guard (`rooms.version`) used everywhere else, clears `currentGameId` back
+to `null`, and resets every player's `ready` flag to false. The room code and every player's identity/
+session cookie are untouched, so "play again" is just: room flips to LOBBY, host (optionally) picks a
+new scenario/difficulty, everyone re-readies, host starts — the existing LOBBY -> STARTING -> ACTIVE
+path runs unchanged and assigns fresh roles via the same shuffle `startGame` always uses.
+`ABANDONED` deliberately stays fully terminal — a room walked away from mid-game was not "finished,"
+so it is not eligible for rematch.
+
+**Why this is safe against stale in-flight actions**: the completed game's row is never mutated or
+deleted — only the *room's* pointer to it (`currentGameId`) is cleared — so any late-arriving read of
+the old game (e.g. an AI hypothesis-evaluation callback that was still in flight) resolves against a
+game record that still exists and simply never gets re-attached to the room. Any late *write* attempt
+against the old game (e.g. a stale `final:submit` retry) is rejected with `INVALID_PHASE`, because
+every game-scoped socket handler resolves "the active game" via `room.currentGameId`, which is now
+`null`. The client mirrors this: `GameProvider` tracks the room's current `gameId` and drops any
+`game:snapshot` naming a different one, and clears local game/debrief state the moment a `room:snapshot`
+reports `LOBBY` with no `gameId` — so a rematch can never leave the previous round's evidence, chat, or
+score visible in the next one. See `apps/server/src/__tests__/v0.3.test.ts` ("rematch / replayability")
+for the adversarial coverage, including a stale `final:submit` fired after rematch.
+
+**What would make us reconsider**: an accounts/persistent-history system (explicitly out of scope
+through V0.6) would probably want completed games to remain independently addressable/linkable rather
+than being superseded in place — at that point rematch might become "create a new room, pre-filled from
+the old one" instead of an in-place phase transition.

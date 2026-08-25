@@ -22,14 +22,19 @@ export function toPublicPlayer(player: PlayerRow, role: Role | null, isHost: boo
  * exactly what host-transfer-on-disconnect requires: transferring host is a
  * single UPDATE to `rooms`, with nothing else to keep in sync.
  */
-export function toRoomSnapshot(room: RoomRow, players: PlayerRow[], roleByPlayerId: Map<string, Role>): RoomSnapshot {
+export function toRoomSnapshot(
+  room: RoomRow,
+  players: PlayerRow[],
+  roleByPlayerId: Map<string, Role>,
+  scenarioId: string | null = null,
+): RoomSnapshot {
   return {
     roomId: room.id,
     code: room.code,
     phase: room.phase as RoomSnapshot["phase"],
     players: players.map((p) => toPublicPlayer(p, roleByPlayerId.get(p.id) ?? null, p.id === room.hostPlayerId)),
     gameId: room.currentGameId,
-    scenarioId: null,
+    scenarioId,
     createdAt: room.createdAt.toISOString(),
   };
 }

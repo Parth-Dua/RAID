@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { Server } from "socket.io";
 import { io as ioc, type Socket } from "socket.io-client";
@@ -145,22 +146,35 @@ export async function setupActiveGame(
   url: string,
   playerCount: 3 | 4,
   durationPreset: "instant" | "demo" | "standard" = "instant",
+  opts?: { scenarioId?: string; difficulty?: "NORMAL" | "HARD"; bots?: TestBot[]; roomCode?: string },
 ): Promise<{ roomCode: string; gameId: string; bots: TestBot[] }> {
-  const names = ["Host", "Ada", "Grace", "Linus"].slice(0, playerCount);
-  const { roomCode, ...hostIdentity } = await createRoomHttp(url, names[0]!);
-  const identities: (TestIdentity & { name: string })[] = [{ ...hostIdentity, name: names[0]! }];
-  for (const name of names.slice(1)) {
-    const identity = await joinRoomHttp(url, roomCode, name);
-    identities.push({ ...identity, name });
-  }
+  let roomCode: string;
+  let bots: TestBot[];
+  if (opts?.bots && opts.roomCode) {
+    // Reuse an existing room/bot set (rematch flow) instead of creating a fresh room.
+    roomCode = opts.roomCode;
+    bots = opts.bots;
+    for (const bot of bots) {
+      await emitAck(bot.socket, "player:ready", { ready: true });
+    }
+  } else {
+    const names = ["Host", "Ada", "Grace", "Linus"].slice(0, playerCount);
+    const { roomCode: newRoomCode, ...hostIdentity } = await createRoomHttp(url, names[0]!);
+    roomCode = newRoomCode;
+    const identities: (TestIdentity & { name: string })[] = [{ ...hostIdentity, name: names[0]! }];
+    for (const name of names.slice(1)) {
+      const identity = await joinRoomHttp(url, roomCode, name);
+      identities.push({ ...identity, name });
+    }
 
-  const bots: TestBot[] = [];
-  for (const identity of identities) {
-    const socket = await connectSocket(url, identity, roomCode);
-    bots.push({ ...identity, socket });
-  }
-  for (const bot of bots) {
-    await emitAck(bot.socket, "player:ready", { ready: true });
+    bots = [];
+    for (const identity of identities) {
+      const socket = await connectSocket(url, identity, roomCode);
+      bots.push({ ...identity, socket });
+    }
+    for (const bot of bots) {
+      await emitAck(bot.socket, "player:ready", { ready: true });
+    }
   }
 
   const snapshotPromises = bots.map((bot) =>
@@ -169,8 +183,32 @@ export async function setupActiveGame(
       bot.tools = snap.tools;
     }),
   );
-  const { gameId } = await emitAck<{ gameId: string }>(bots[0]!.socket, "game:start", { durationPreset });
+  const { gameId } = await emitAck<{ gameId: string }>(bots[0]!.socket, "game:start", {
+    durationPreset,
+    scenarioId: opts?.scenarioId,
+    difficulty: opts?.difficulty,
+  });
   await Promise.all(snapshotPromises);
 
   return { roomCode, gameId, bots };
+}
+
+/** setupActiveGame, then immediately submits a minimal final answer and waits for completion.
+ * Used by rematch tests, which need a COMPLETED room to rematch from. */
+export async function setupCompletedGame(
+  url: string,
+  playerCount: 3 | 4,
+  opts?: { scenarioId?: string; difficulty?: "NORMAL" | "HARD" },
+): Promise<{ roomCode: string; gameId: string; bots: TestBot[] }> {
+  const game = await setupActiveGame(url, playerCount, "instant", opts);
+  const submitter = game.bots[0]!;
+  const completedPromise = waitForEvent(submitter.socket, "game:completed", () => true, 15000);
+  await emitAck(submitter.socket, "final:submit", {
+    rootCause: "Placeholder root cause for a test that only needs the game to reach COMPLETED.",
+    supportingEvidenceIds: [],
+    remediation: "Placeholder remediation.",
+    clientMsgId: randomUUID(),
+  });
+  await completedPromise;
+  return game;
 }

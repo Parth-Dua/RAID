@@ -47,6 +47,7 @@ export const games = pgTable("games", {
     .notNull()
     .references(() => rooms.id, { onDelete: "cascade" }),
   scenarioId: varchar("scenario_id", { length: 60 }).notNull(),
+  difficulty: varchar("difficulty", { length: 10 }).notNull().default("NORMAL"),
   durationSeconds: integer("duration_seconds").notNull(),
   startedAt: timestamp("started_at", { withTimezone: true }),
   endsAt: timestamp("ends_at", { withTimezone: true }),

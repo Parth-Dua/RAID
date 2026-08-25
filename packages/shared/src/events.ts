@@ -20,8 +20,15 @@ export const GameStartPayload = z.object({
   // "instant" is intentionally undocumented in the web UI - see DURATION_PRESETS
   // in @raid/game-engine for why it exists (fast bot-simulation regression runs).
   durationPreset: z.enum(["standard", "demo", "instant"]).optional(),
+  scenarioId: z.string().min(1).max(60).optional(),
+  difficulty: z.enum(["NORMAL", "HARD"]).optional(),
 });
 export type GameStartPayload = z.infer<typeof GameStartPayload>;
+
+/** Host-only, only legal once the room is COMPLETED: resets the room back to LOBBY for another
+ * round with the same players, without creating a brand-new room/invite code. */
+export const RematchPayload = z.object({});
+export type RematchPayload = z.infer<typeof RematchPayload>;
 
 export const ChatSendPayload = z.object({
   text: z.string().min(1).max(500),
@@ -75,6 +82,7 @@ export const ClientToServerEvents = {
   "player:ready": PlayerReadyPayload,
   "player:leave": PlayerLeavePayload,
   "game:start": GameStartPayload,
+  "game:rematch": RematchPayload,
   "chat:send": ChatSendPayload,
   "tool:execute": ToolExecutePayload,
   "hypothesis:create": HypothesisCreatePayload,

@@ -11,7 +11,10 @@ const LEGAL_TRANSITIONS: Record<GamePhase, GamePhase[]> = {
   STARTING: ["ACTIVE", "ABANDONED"],
   ACTIVE: ["FINALIZING", "ABANDONED"],
   FINALIZING: ["COMPLETED", "ABANDONED"],
-  COMPLETED: [],
+  // A completed room can be reset back to LOBBY for a rematch with the same players/room code
+  // (V0.3.5 replayability) rather than requiring a brand-new room. ABANDONED stays terminal -
+  // an abandoned room was walked away from, not finished, so it is not eligible for rematch.
+  COMPLETED: ["LOBBY"],
   ABANDONED: [],
 };
 
