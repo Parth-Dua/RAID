@@ -61,8 +61,9 @@ export function buildFinalEvaluationContext(input: FinalEvaluationInput): { syst
       "the team's submission actually engages with, whether cited by ID or clearly described) }.",
     "Score generously for correct causal reasoning even if evidence IDs weren't cited by exact ID, as long as the " +
       "submission clearly demonstrates awareness of that evidence. Do not award rootCauseAccuracy above 15 unless " +
-      "the submission correctly identifies BOTH the code-level cause (the N+1-style repeated lookup introduced by " +
-      "the deploy) AND the infrastructure-level mechanism (connection pool exhaustion) that turned it into 5xx errors.",
+      "the submission correctly identifies BOTH the specific code/config-level trigger AND the infrastructure-level " +
+      "mechanism that turned it into user-facing failures, as described in the causal chain above — the causal " +
+      "chain is this scenario's actual ground truth, not a generic template, so grade against it specifically.",
   ].join("\n");
   return { system: SYSTEM_PREAMBLE, user };
 }

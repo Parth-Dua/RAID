@@ -137,6 +137,29 @@ export interface ScenarioDefinition {
   };
   plausibleWrongHypotheses: string[];
   rubricWeights: ScenarioRubricWeights;
+  /**
+   * Scenario-authored keyword hints MockAIProvider matches against, so the mock's scoring
+   * heuristic is data-driven per scenario rather than one hardcoded checkout-degradation-shaped
+   * keyword list applied to every scenario (which would score "lock contention" or "memory leak"
+   * as wrong even when they're the actual answer for those scenarios). Never read by the real
+   * DeepSeek provider - it reasons from the full causal chain/evidence already in its prompt.
+   */
+  scoringHints: {
+    /** Terms that indicate genuine causal understanding of this scenario's actual root cause. */
+    causalTerms: string[];
+    /** Terms strongly associated with one of this scenario's red herrings / wrong explanations. */
+    redHerringTerms: string[];
+    /** Terms indicating a remediation that matches this scenario's actual fix. */
+    remediationTerms: string[];
+    /**
+     * A small set of *mutually non-overlapping* (no term a substring of another) phrases unique
+     * enough that reciting 2+ of them together is reciting the mechanism, not making one
+     * legitimate observation. Used only by `leakGuard.containsRootCauseLeak` - deliberately a
+     * separate, stricter list from `causalTerms` above (which favors recall for scoring and can
+     * include generic single words like "pool" that would false-positive here on a single mention).
+     */
+    distinctiveTerms: string[];
+  };
 }
 
 /** Lightweight, spoiler-free listing used by the scenario-selection UI - never includes evidence/root cause. */

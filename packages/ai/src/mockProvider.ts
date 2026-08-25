@@ -24,8 +24,8 @@ export class MockAIProvider implements AIProvider {
     const start = Date.now();
     const text = input.hypothesisText.toLowerCase();
 
-    const supportiveTerms = ["connection pool", "pool exhaust", "n+1", "n + 1", "repeated quer", "deploy", "loyalty"];
-    const redHerringTerms = ["traffic spike", "memory leak", "crash loop", "replication", "lock contention", "payment provider", "network"];
+    const supportiveTerms = input.scenario.scoringHints.causalTerms;
+    const redHerringTerms = input.scenario.scoringHints.redHerringTerms;
 
     const supportiveHits = supportiveTerms.filter((t) => text.includes(t)).length;
     const redHerringHits = redHerringTerms.filter((t) => text.includes(t)).length;
@@ -42,8 +42,9 @@ export class MockAIProvider implements AIProvider {
       result = {
         status: "SUPPORTED",
         rationale:
-          "This is consistent with multiple signals the team has found. Make sure you can also explain why CPU " +
-          "and memory stayed flat, and cite specific evidence when you submit a final diagnosis.",
+          "This is consistent with multiple signals the team has found. Make sure you can account for every " +
+          "anomalous reading the team has surfaced, not just the ones that fit this theory, and cite specific " +
+          "evidence when you submit a final diagnosis.",
       };
     } else if (supportiveHits === 1) {
       result = {
@@ -70,7 +71,7 @@ export class MockAIProvider implements AIProvider {
     const start = Date.now();
     const text = (input.rootCause + " " + input.remediation).toLowerCase();
 
-    const causalTerms = ["deploy", "loyalty", "n+1", "n + 1", "repeated quer", "per item", "per-item", "connection pool", "pool"];
+    const { causalTerms, remediationTerms } = input.scenario.scoringHints;
     const hits = causalTerms.filter((t) => text.includes(t)).length;
     const fraction = Math.min(1, hits / 4);
 
@@ -81,10 +82,10 @@ export class MockAIProvider implements AIProvider {
     const result: FinalEvaluation = {
       rootCauseAccuracy: Math.round(fraction * 40),
       evidenceQuality: Math.round(Math.min(1, citedKeyIds.length / 4) * 20),
-      remediationQuality: text.includes("batch") || text.includes("cache") || text.includes("rollback") ? 16 : 8,
+      remediationQuality: remediationTerms.some((t) => text.includes(t)) ? 16 : 8,
       rationale:
         fraction >= 0.75
-          ? "The submission correctly identifies the deploy-driven query volume increase and its effect on the connection pool."
+          ? "The submission correctly identifies the scenario's actual causal mechanism."
           : "The submission captures part of the picture but doesn't fully connect the code-level change to the infrastructure-level failure mode.",
       matchedKeyEvidenceIds: citedKeyIds,
     };

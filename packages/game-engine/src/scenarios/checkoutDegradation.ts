@@ -501,5 +501,11 @@ export function buildCheckoutDegradationScenario(durationSeconds: number): Omit<
       efficiency: 10,
       collaboration: 10,
     },
+    scoringHints: {
+      causalTerms: ["deploy", "loyalty", "n+1", "n + 1", "repeated quer", "per item", "per-item", "connection pool", "pool"],
+      redHerringTerms: ["traffic spike", "memory leak", "crash loop", "replication", "lock contention", "payment provider", "network"],
+      remediationTerms: ["batch", "cache", "rollback"],
+      distinctiveTerms: ["n+1", "loyalty_history", "connection pool", "pool saturat", "20-connection"],
+    },
   };
 }

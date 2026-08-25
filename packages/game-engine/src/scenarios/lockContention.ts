@@ -472,5 +472,21 @@ export function buildLockContentionScenario(durationSeconds: number): Omit<Scena
       efficiency: 10,
       collaboration: 10,
     },
+    scoringHints: {
+      causalTerms: [
+        "lock",
+        "backfill",
+        "transaction",
+        "idle-in-transaction",
+        "idle in transaction",
+        "uncommitted",
+        "blocking",
+        "loyalty_tier",
+        "migration",
+      ],
+      redHerringTerms: ["traffic spike", "deadlock", "payment provider", "replication", "crash loop", "network"],
+      remediationTerms: ["batch", "commit", "timeout", "kill the job", "pause the job"],
+      distinctiveTerms: ["backfillloyaltytier", "idle-in-transaction", "loyalty_tier", "uncommitted transaction", "blocking chain"],
+    },
   };
 }

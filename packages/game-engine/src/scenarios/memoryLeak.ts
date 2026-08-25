@@ -488,5 +488,11 @@ export function buildMemoryLeakScenario(durationSeconds: number): Omit<ScenarioD
       efficiency: 10,
       collaboration: 10,
     },
+    scoringHints: {
+      causalTerms: ["cache", "memory", "leak", "oom", "unbounded", "request id", "request-id", "per-request", "evict", "requestid"],
+      redHerringTerms: ["ml model", "model service", "traffic spike", "slow quer", "network", "node failure", "infra failure"],
+      remediationTerms: ["lru", "evict", "bounded", "rollback", "feature flag", "user id", "userid"],
+      distinctiveTerms: ["per-request id", "per-request uuid", "unbounded cache", "oom-kill", "oomkill", "never evicted"],
+    },
   };
 }

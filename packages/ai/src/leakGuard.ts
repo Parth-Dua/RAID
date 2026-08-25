@@ -32,8 +32,11 @@ export function containsRootCauseLeak(rationale: string, scenario: ScenarioDefin
 
   // Catch a rationale that strings together several of the causal-chain's
   // distinguishing terms verbatim — a single shared term (e.g. "checkout")
-  // is expected and fine, but reciting the mechanism is a leak.
-  const distinctiveTerms = ["n+1", "loyalty_history", "connection pool", "pool saturat", "20-connection"];
+  // is expected and fine, but reciting the mechanism is a leak. Reads each
+  // scenario's authored `scoringHints.distinctiveTerms` (see domain.ts) so
+  // this check is scenario-specific by data, not a hardcoded term list tied
+  // to one scenario — every scenario gets equal leak protection.
+  const distinctiveTerms = scenario.scoringHints.distinctiveTerms;
   const hits = distinctiveTerms.filter((t) => lower.includes(t)).length;
   if (hits >= 2) return true;
 
