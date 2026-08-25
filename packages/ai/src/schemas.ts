@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { INTERVENTION_KINDS, ROLES, TEAM_STATE_CLASSIFICATIONS } from "@raid/shared";
 
 /**
  * Every one of these schemas validates untrusted model output before it is
@@ -33,6 +34,30 @@ export const DebriefContentSchema = z.object({
   coachingNotes: z.array(z.string().min(5).max(300)).min(1).max(6),
 });
 export type DebriefContent = z.infer<typeof DebriefContentSchema>;
+
+/** V0.4.2: structured-output-only team-state classification, Zod validated like every other AI
+ * response. `confidence` lets the caller apply a minimum-confidence gate before acting on it. */
+export const TeamStateClassificationSchema = z.object({
+  classification: z.enum(TEAM_STATE_CLASSIFICATIONS),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string().min(10).max(400),
+});
+export type TeamStateClassificationResult = z.infer<typeof TeamStateClassificationSchema>;
+
+/** V0.4.3: a proposed intervention. Validated here (shape) and again by
+ * `interventionValidator.ts` (safety semantics — leak check, budget) before it is ever delivered. */
+export const InterventionProposalSchema = z
+  .object({
+    shouldIntervene: z.boolean(),
+    kind: z.enum(INTERVENTION_KINDS).nullable(),
+    message: z.string().min(10).max(300).nullable(),
+    targetRole: z.enum(ROLES).nullable(),
+    confidence: z.number().min(0).max(1),
+  })
+  .refine((v) => !v.shouldIntervene || (v.kind !== null && v.message !== null), {
+    message: "kind and message are required when shouldIntervene is true",
+  });
+export type InterventionProposal = z.infer<typeof InterventionProposalSchema>;
 
 /** Not exercised at MVP runtime (scenario is authored, not generated) — kept as a
  * documented extension point / schema so a future `generateScenario` call has

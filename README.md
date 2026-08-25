@@ -6,7 +6,7 @@ RAID is a real-time multiplayer AI incident-response simulator where engineers w
 
 - **Asymmetric information** — each player sees a different role's logs, metrics, and tools; no single player ever has enough evidence to solve the incident alone.
 - **Collaborative debugging under pressure** — a server-authoritative clock and evidence that unlocks over time force the team to communicate, not just individually click through a checklist.
-- **AI that reasons about the team, not one player** — DeepSeek evaluates hypotheses and the final diagnosis against what the *group* has collectively surfaced, never a single private chat transcript.
+- **AI that reasons about the team, not one player** — DeepSeek evaluates hypotheses and the final diagnosis against what the *group* has collectively surfaced, and an adaptive Game Master watches for a stuck or fixated team and nudges (never solves) from a bounded, structured read of the team's state — never a single private chat transcript.
 - **Realistic engineering incidents** — 3 shipping scenarios (N+1 query → connection-pool saturation; a long-held lock blocking writes; an unbounded in-process cache → OOM-kill crash loop), each the kind of postmortem a real backend/SRE team would recognize, not a puzzle-box abstraction.
 - **Server-authoritative multiplayer** — every mutation is re-validated against the database on every request; clients propose, the server decides.
 
@@ -150,7 +150,7 @@ docker/              Local Postgres + production Dockerfiles
 V0.1 — Core multiplayer incident simulator    [shipped]
 V0.2 — Playability + role balance             [shipped]
 V0.3 — Scenario expansion + replayability      [shipped]
-V0.4 — Adaptive multiplayer AI
+V0.4 — Adaptive multiplayer AI                [shipped]
 V0.5 — AI-assisted scenario generation
 V0.6 — Social + replay layer
 ```

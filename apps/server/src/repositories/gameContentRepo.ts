@@ -53,7 +53,7 @@ export async function insertChatMessage(
     authorId: string | null;
     authorName: string;
     text: string;
-    kind: "player" | "system";
+    kind: "player" | "system" | "ai_intervention";
     clientMsgId: string | null;
   },
 ) {

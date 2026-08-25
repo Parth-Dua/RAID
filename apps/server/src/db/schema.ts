@@ -160,7 +160,8 @@ export const chatMessages = pgTable(
     authorId: uuid("author_id"),
     authorName: varchar("author_name", { length: 40 }).notNull(),
     text: text("text").notNull(),
-    kind: varchar("kind", { length: 10 }).notNull().default("player"),
+    // "player" | "system" | "ai_intervention" (V0.4) - widened from 10 to fit "ai_intervention".
+    kind: varchar("kind", { length: 20 }).notNull().default("player"),
     clientMsgId: uuid("client_msg_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -178,6 +179,28 @@ export const knownFacts = pgTable("known_facts", {
   addedBy: uuid("added_by")
     .notNull()
     .references(() => players.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * V0.4 adaptive Game Master intervention history — one row per intervention actually delivered
+ * (proposals the AI declined, or that failed backend validation/budget checks, are never
+ * persisted here; they only ever exist as an in-memory AIInvocationMeta for logging). Durable
+ * history backs the per-game intervention budget (max count + cooldown, see gameMasterService.ts)
+ * and is queryable independently of chat_messages, which mixes interventions in with player/system
+ * chat for the UI.
+ */
+export const gameInterventions = pgTable("game_interventions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  gameId: uuid("game_id")
+    .notNull()
+    .references(() => games.id, { onDelete: "cascade" }),
+  classification: varchar("classification", { length: 30 }).notNull(),
+  kind: varchar("kind", { length: 30 }).notNull(),
+  message: text("message").notNull(),
+  targetRole: varchar("target_role", { length: 30 }),
+  confidence: integer("confidence_pct").notNull(), // 0-100, stored as an int (confidence * 100)
+  elapsedSeconds: integer("elapsed_seconds").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

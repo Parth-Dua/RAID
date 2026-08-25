@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { buildScenario, listScenarioIds } from "@raid/game-engine";
 import { MockAIProvider } from "../mockProvider.js";
+import type { CollectiveReasoningState } from "../collectiveState.js";
+import { TEAM_STATE_CLASSIFICATIONS } from "@raid/shared";
 
 const scenario = buildScenario("checkout-degradation", 1200);
 const provider = new MockAIProvider();
+
+function baseState(overrides: Partial<CollectiveReasoningState> = {}): CollectiveReasoningState {
+  return {
+    elapsedSeconds: 300,
+    durationSeconds: 1200,
+    discoveredEvidence: scenario.evidence.slice(0, 6).map((e) => ({ id: e.id, title: e.title, category: e.category })),
+    activeHypotheses: [{ text: "A plausible direction", status: "PLAUSIBLE" }],
+    challengedHypotheses: [],
+    ruledOutHypotheses: [],
+    openQuestions: [],
+    knownFacts: [],
+    toolsExecuted: [],
+    recentTrajectory: [{ atSeconds: 250, summary: "Ran a tool" }],
+    subsystemCoverage: { backend_engineer: 0.4, database_engineer: 0.4, sre: 0.4 },
+    ...overrides,
+  };
+}
 
 describe("MockAIProvider", () => {
   it("never calls the network and always resolves", async () => {
@@ -135,6 +154,115 @@ describe("MockAIProvider", () => {
       });
       expect(good.result.rootCauseAccuracy).toBeGreaterThan(weak.result.rootCauseAccuracy);
       expect(good.result.rootCauseAccuracy).toBeGreaterThan(20);
+    });
+  });
+
+  describe("classifyTeamState", () => {
+    it("always returns one of the 7 documented classifications", async () => {
+      const { result } = await provider.classifyTeamState({ scenario, state: baseState() });
+      expect(TEAM_STATE_CLASSIFICATIONS).toContain(result.classification);
+      expect(result.confidence).toBeGreaterThanOrEqual(0);
+      expect(result.confidence).toBeLessThanOrEqual(1);
+    });
+
+    it("classifies as STALLED when there's been no recent activity despite meaningful elapsed time", async () => {
+      const { result } = await provider.classifyTeamState({
+        scenario,
+        state: baseState({ elapsedSeconds: 600, recentTrajectory: [] }),
+      });
+      expect(result.classification).toBe("STALLED");
+    });
+
+    it("classifies as INSUFFICIENT_EVIDENCE early with little evidence discovered", async () => {
+      const { result } = await provider.classifyTeamState({
+        scenario,
+        state: baseState({ elapsedSeconds: 100, discoveredEvidence: [], recentTrajectory: [{ atSeconds: 90, summary: "x" }] }),
+      });
+      expect(result.classification).toBe("INSUFFICIENT_EVIDENCE");
+    });
+
+    it("classifies as CONTRADICTORY_REASONING when an active hypothesis is under unresolved challenge", async () => {
+      const { result } = await provider.classifyTeamState({
+        scenario,
+        state: baseState({
+          activeHypotheses: [{ text: "disputed theory", status: "PLAUSIBLE" }],
+          challengedHypotheses: [{ text: "disputed theory", status: "PLAUSIBLE", challengeCount: 1 }],
+        }),
+      });
+      expect(result.classification).toBe("CONTRADICTORY_REASONING");
+    });
+
+    it("classifies as TUNNEL_VISION when only one subsystem has been touched deep into the game", async () => {
+      const { result } = await provider.classifyTeamState({
+        scenario,
+        state: baseState({
+          elapsedSeconds: 700,
+          subsystemCoverage: { backend_engineer: 0.8, database_engineer: 0, sre: 0 },
+        }),
+      });
+      expect(result.classification).toBe("TUNNEL_VISION");
+    });
+
+    it("classifies as SOLVING_TOO_QUICKLY when a hypothesis is already SUPPORTED with little evidence", async () => {
+      const { result } = await provider.classifyTeamState({
+        scenario,
+        state: baseState({
+          discoveredEvidence: scenario.evidence.slice(0, 3).map((e) => ({ id: e.id, title: e.title, category: e.category })),
+          // References a real causal term so this doesn't also trip IGNORING_CRITICAL_SIGNAL -
+          // this test isolates the "confident but under-evidenced" case specifically.
+          activeHypotheses: [{ text: `confident theory about ${scenario.scoringHints.causalTerms[0]}`, status: "SUPPORTED" }],
+        }),
+      });
+      expect(result.classification).toBe("SOLVING_TOO_QUICKLY");
+    });
+
+    it("classifies as ON_TRACK for healthy, active, well-evidenced investigation", async () => {
+      const { result } = await provider.classifyTeamState({
+        scenario,
+        state: baseState({
+          discoveredEvidence: scenario.evidence.map((e) => ({ id: e.id, title: e.title, category: e.category })),
+          activeHypotheses: [{ text: "a well-supported theory referencing " + scenario.scoringHints.causalTerms[0], status: "SUPPORTED" }],
+          subsystemCoverage: { backend_engineer: 1, database_engineer: 1, sre: 1 },
+        }),
+      });
+      expect(result.classification).toBe("ON_TRACK");
+    });
+  });
+
+  describe("proposeIntervention", () => {
+    it("never intervenes on ON_TRACK", async () => {
+      const { result } = await provider.proposeIntervention({ scenario, state: baseState(), classification: "ON_TRACK" });
+      expect(result.shouldIntervene).toBe(false);
+      expect(result.kind).toBeNull();
+      expect(result.message).toBeNull();
+    });
+
+    it("never intervenes on SOLVING_TOO_QUICKLY", async () => {
+      const { result } = await provider.proposeIntervention({ scenario, state: baseState(), classification: "SOLVING_TOO_QUICKLY" });
+      expect(result.shouldIntervene).toBe(false);
+    });
+
+    it.each(["TUNNEL_VISION", "CONTRADICTORY_REASONING", "IGNORING_CRITICAL_SIGNAL", "STALLED"] as const)(
+      "proposes a valid, non-leaking intervention for %s",
+      async (classification) => {
+        const { result } = await provider.proposeIntervention({ scenario, state: baseState(), classification });
+        expect(result.shouldIntervene).toBe(true);
+        expect(result.kind).not.toBeNull();
+        expect(result.message).not.toBeNull();
+        expect(result.message!.length).toBeGreaterThanOrEqual(10);
+        // The message must never contain a real evidence or tool id verbatim.
+        for (const e of scenario.evidence) expect(result.message).not.toContain(e.id);
+        for (const t of scenario.tools) expect(result.message).not.toContain(t.id);
+      },
+    );
+
+    it("targets the least-covered role for a TUNNEL_VISION intervention", async () => {
+      const { result } = await provider.proposeIntervention({
+        scenario,
+        state: baseState({ subsystemCoverage: { backend_engineer: 1, database_engineer: 0, sre: 0.5 } }),
+        classification: "TUNNEL_VISION",
+      });
+      expect(result.targetRole).toBe("database_engineer");
     });
   });
 

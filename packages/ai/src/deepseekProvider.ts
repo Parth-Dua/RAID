@@ -5,17 +5,30 @@ import type {
   DebriefInput,
   FinalEvaluationInput,
   HypothesisEvaluationInput,
+  InterventionProposalInput,
+  TeamStateClassificationInput,
 } from "./provider.js";
 import {
   DebriefContentSchema,
   FinalEvaluationSchema,
   HypothesisEvaluationSchema,
+  InterventionProposalSchema,
+  TeamStateClassificationSchema,
   type DebriefContent,
   type FinalEvaluation,
   type HypothesisEvaluation,
+  type InterventionProposal,
+  type TeamStateClassificationResult,
 } from "./schemas.js";
-import { buildDebriefContext, buildFinalEvaluationContext, buildHypothesisContext } from "./contextBuilders.js";
+import {
+  buildDebriefContext,
+  buildFinalEvaluationContext,
+  buildHypothesisContext,
+  buildInterventionProposalContext,
+  buildTeamStateClassificationContext,
+} from "./contextBuilders.js";
 import { containsRootCauseLeak } from "./leakGuard.js";
+import { validateIntervention } from "./interventionValidator.js";
 import { MockAIProvider } from "./mockProvider.js";
 
 export interface DeepSeekProviderConfig {
@@ -84,6 +97,43 @@ export class DeepSeekProvider implements AIProvider {
         return { valid: true, sanitized: parsed };
       },
       () => this.fallback.evaluateFinalDiagnosis(input),
+    );
+  }
+
+  async classifyTeamState(
+    input: TeamStateClassificationInput,
+  ): Promise<{ result: TeamStateClassificationResult; meta: AIInvocationMeta }> {
+    const { system, user } = buildTeamStateClassificationContext(input);
+    return this.run(
+      "classifyTeamState",
+      system,
+      user,
+      TeamStateClassificationSchema,
+      (parsed) => {
+        if (containsRootCauseLeak(parsed.rationale, input.scenario)) {
+          return { valid: false, reason: "rationale appears to leak the root cause" };
+        }
+        return { valid: true, sanitized: parsed };
+      },
+      () => this.fallback.classifyTeamState(input),
+    );
+  }
+
+  async proposeIntervention(input: InterventionProposalInput): Promise<{ result: InterventionProposal; meta: AIInvocationMeta }> {
+    const { system, user } = buildInterventionProposalContext(input);
+    return this.run(
+      "proposeIntervention",
+      system,
+      user,
+      InterventionProposalSchema,
+      (parsed) => {
+        const validation = validateIntervention(parsed, input.scenario);
+        if (!validation.valid) {
+          return { valid: false, reason: validation.reason ?? "intervention failed backend validation" };
+        }
+        return { valid: true, sanitized: parsed };
+      },
+      () => this.fallback.proposeIntervention(input),
     );
   }
 

@@ -62,6 +62,36 @@ export interface EvidenceUnlockCondition {
 export const DIFFICULTIES = ["NORMAL", "HARD"] as const;
 export type Difficulty = (typeof DIFFICULTIES)[number];
 
+/**
+ * V0.4 adaptive Game Master: how the AI classifies the team's current investigative state, from a
+ * bounded collective-reasoning snapshot (never raw chat). ON_TRACK and SOLVING_TOO_QUICKLY never
+ * trigger an intervention (nothing to correct); the other five are intervention-eligible states.
+ * See docs/AI_DESIGN.md "Adaptive Game Master".
+ */
+export const TEAM_STATE_CLASSIFICATIONS = [
+  "ON_TRACK",
+  "TUNNEL_VISION",
+  "INSUFFICIENT_EVIDENCE",
+  "CONTRADICTORY_REASONING",
+  "IGNORING_CRITICAL_SIGNAL",
+  "STALLED",
+  "SOLVING_TOO_QUICKLY",
+] as const;
+export type TeamStateClassification = (typeof TEAM_STATE_CLASSIFICATIONS)[number];
+
+/** Safe, bounded intervention kinds the AI may propose (V0.4.3). Never includes anything that
+ * changes the root cause, fabricates facts, reveals the answer, exposes private evidence, mutates
+ * score, or bypasses the game engine — every intervention is delivered as a labeled, read-only
+ * system chat message, never a mutation to evidence/hypotheses/score. */
+export const INTERVENTION_KINDS = [
+  "CUSTOMER_SYMPTOM",
+  "TIMING_ADJUSTMENT",
+  "OPERATIONAL_CLUE",
+  "RECONCILE_SUGGESTION",
+  "OPTIONAL_HINT",
+] as const;
+export type InterventionKind = (typeof INTERVENTION_KINDS)[number];
+
 export interface EvidenceDefinition {
   id: string;
   /** Role(s) that can see this evidence once unlocked. */
@@ -199,7 +229,10 @@ export interface ChatMessage {
   authorId: string | null;
   authorName: string;
   text: string;
-  kind: "player" | "system";
+  /** "ai_intervention" (V0.4) is a delivered, budget/cooldown-gated Game Master nudge - rendered
+   * distinctly from "system" (deterministic timeline events) so players can tell scripted incident
+   * progression apart from the adaptive AI's read of the team's investigation. */
+  kind: "player" | "system" | "ai_intervention";
   createdAt: string;
 }
 

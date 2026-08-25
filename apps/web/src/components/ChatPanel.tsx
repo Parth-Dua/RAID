@@ -29,11 +29,23 @@ export function ChatPanel() {
     <div className="flex flex-col h-full">
       <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto scrollbar-thin -mx-3 px-3 pb-2">
         {gameSnapshot.chat.map((m) => (
-          <div key={m.id} className={m.kind === "system" ? "text-[11px] text-ink-500 italic" : "text-xs"}>
+          <div
+            key={m.id}
+            className={
+              m.kind === "system"
+                ? "text-[11px] text-ink-500 italic"
+                : m.kind === "ai_intervention"
+                  ? "text-xs bg-accent-soft border border-accent/30 rounded px-2 py-1.5"
+                  : "text-xs"
+            }
+          >
             {m.kind === "player" && (
               <span className={`font-medium mr-1.5 ${m.authorId === myPlayerId ? "text-accent" : "text-ink-300"}`}>
                 {m.authorName}:
               </span>
+            )}
+            {m.kind === "ai_intervention" && (
+              <span className="font-semibold mr-1.5 text-accent uppercase tracking-wide text-[10px]">Game Master:</span>
             )}
             <span className="text-ink-200">{m.text}</span>
           </div>

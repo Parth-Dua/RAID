@@ -17,6 +17,7 @@ erDiagram
     GAMES ||--o{ HYPOTHESES : has
     GAMES ||--o{ CHAT_MESSAGES : has
     GAMES ||--o{ KNOWN_FACTS : has
+    GAMES ||--o{ GAME_INTERVENTIONS : has
     GAMES ||--o| FINAL_SUBMISSIONS : "has one"
     GAMES ||--o| GAME_RESULTS : "has one"
     PLAYERS ||--o{ GAME_PLAYERS : plays_as
@@ -94,8 +95,9 @@ erDiagram
     CHAT_MESSAGES {
         uuid id PK
         uuid game_id FK
-        uuid author_id "nullable = system message"
+        uuid author_id "nullable = system or ai_intervention message"
         text text
+        varchar kind "player | system | ai_intervention (V0.4)"
         uuid client_msg_id "dedup key"
     }
     KNOWN_FACTS {
@@ -104,6 +106,16 @@ erDiagram
         text text
         varchar source_evidence_id
         uuid added_by FK
+    }
+    GAME_INTERVENTIONS {
+        uuid id PK
+        uuid game_id FK
+        varchar classification "the 7-value V0.4 team-state enum"
+        varchar kind "the 5-value safe-intervention enum"
+        text message
+        varchar target_role "nullable = broadcast to whole team"
+        int confidence_pct
+        int elapsed_seconds
     }
     FINAL_SUBMISSIONS {
         uuid id PK

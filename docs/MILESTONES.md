@@ -17,6 +17,7 @@ require live-integration evidence mocks can't provide.
 | V0.1 (prior session) | 3 (all failed at network layer — sandbox egress blocked `api.deepseek.com`) | 0 (never reached the model) | 0 | $0.00 | $0.00 |
 | V0.2 | 0 (mock only) | 0 | 0 | $0.00 | $0.00 |
 | V0.3 | 0 (mock only) | 0 | 0 | $0.00 | $0.00 |
+| V0.4 | 5 (V0.4.6 smoke test — `deepseekSmokeTest.ts` calls 1-3 unchanged + new calls 4-5 for `classifyTeamState`/`proposeIntervention`; all 5 failed at network layer, sandbox egress blocked `api.deepseek.com`, identical to V0.1) | 0 (never reached the model) | 0 | $0.00 | $0.00 |
 
 Running total: **$0.00 of $8.00**.
 
@@ -231,4 +232,126 @@ group that wants to reshuffle membership between rounds must create a new room i
 
 ---
 
-(V0.4 onward recorded below as each phase completes.)
+## V0.4 — Adaptive multiplayer AI Game Master
+
+**Goal**: give the AI a second capability beyond judging player output — a periodic read of the
+team's *collective* investigative state from a bounded, structured snapshot (never raw chat), a
+7-value structured classification of that state, and the ability to propose a safe, budget-gated
+intervention when (and only when) the team is genuinely stuck — with backend validation making it
+structurally impossible for an intervention to leak the answer, mutate score, or bypass the engine.
+
+**What changed**:
+- **Collective Reasoning State** (`packages/ai/src/collectiveState.ts`): a pure function that turns
+  raw game state into a fixed-shape, capped summary — discovered evidence (titles/category only,
+  never content, ≤20), active/challenged/ruled-out hypotheses (≤10 each), open questions and known
+  facts (≤10/≤15), tools used, the last 15 investigation-trajectory events, and per-role subsystem
+  coverage. Bounded by construction, not convention — the caps never grow regardless of game length,
+  and an intervention can never leak private evidence content because the model is never given
+  evidence content in the first place, only titles.
+- **Team-State Classification**: `classifyTeamState` returns exactly one of 7 fixed values
+  (`ON_TRACK`, `TUNNEL_VISION`, `INSUFFICIENT_EVIDENCE`, `CONTRADICTORY_REASONING`,
+  `IGNORING_CRITICAL_SIGNAL`, `STALLED`, `SOLVING_TOO_QUICKLY`), Zod-validated structured output only.
+- **Safe Interventions**: `proposeIntervention` returns `{shouldIntervene, kind, message, targetRole,
+  confidence}` where `kind` is one of 5 fixed, safe categories. `validateIntervention`
+  (`packages/ai/src/interventionValidator.ts`) runs unconditionally before delivery: rejects any
+  message that leaks the root cause (reusing the same leak guard hypothesis rationales go through) or
+  references a real evidence/tool id verbatim. Structurally, by design (ADR-022), an intervention's
+  *only* possible effect on the game is becoming a read-only chat message — there is no code path from
+  a proposal to any mutation of evidence, hypotheses, or score.
+- **Intervention Budget** (`apps/server/src/services/gameMasterService.ts`): max 3 interventions per
+  game, a 60-elapsed-second cooldown between deliveries, a 0.5 minimum confidence to actually deliver,
+  and a durable `game_interventions` history table backing both checks (declined/invalid/low-confidence
+  proposals are never persisted — only what's actually delivered).
+- **Mock Mode**: `MockAIProvider.classifyTeamState` is a deterministic priority-ordered heuristic
+  ladder over the collective state; `proposeIntervention` returns a fixed, kind-appropriate templated
+  message per intervention-eligible classification. Every automated test runs against this.
+- **Live API Validation**: `deepseekSmokeTest.ts` extended with 2 new real (non-mocked) calls
+  (`classifyTeamState`, `proposeIntervention`) alongside its original 3.
+- **Wiring**: `runGameMasterCheck` (classify → maybe propose → validate → budget/cooldown/confidence
+  gate → persist + deliver) is called periodically — not every tick — from the game clock
+  (`sockets/clock.ts`), at an interval scaled to the scenario's duration (`max(15s, 15% of
+  durationSeconds)`). A classification/AI failure here is caught and logged, never propagated — the
+  Game Master is additive on top of the core loop, never a dependency of it.
+- A delivered intervention is a `ChatMessage` with a new `kind: "ai_intervention"` (widened
+  `chat_messages.kind` column from varchar(10) to varchar(20) to fit it), rendered distinctly in the
+  chat panel ("Game Master:" label, accent-tinted background) so players can tell it apart from
+  scripted timeline system messages and each other's chat.
+- **Architecture-review fix found and fixed before starting new V0.4 work** (committed separately,
+  `1c8efed`): `MockAIProvider`'s scoring and `leakGuard`'s leak-detection both used one hardcoded,
+  checkout-degradation-shaped keyword list applied to every scenario — meaning lock-contention's and
+  memory-leak's own correct answers were scored as if they were red herrings, and those two scenarios
+  had zero leak protection. Fixed by moving keyword hints onto `ScenarioDefinition.scoringHints`,
+  authored per scenario, with 15 new regression tests. See that commit and `docs/DECISIONS.md` is not
+  the write-up for this one — it's a straightforward bug fix, not an architecture decision, and is
+  documented in the commit message and this note instead.
+
+**Acceptance conditions**:
+- PASS collective reasoning state is bounded and structured, never raw/unbounded chat — every list capped, evidence reduced to titles only; verified by `collectiveState.test.ts` (bounding, evidence-content-exclusion) and by inspection (no chat table is ever queried by `buildCollectiveStateForGame`)
+- PASS team-state classification uses exactly the 7 specified values, structured output only — `TeamStateClassificationSchema` enum-validated; `classifyTeamState.test.ts`-equivalent coverage in `mockProvider.test.ts` exercises all 7 branches plus `deepseekProvider.test.ts` covers schema rejection of an invalid value
+- PASS safe interventions are limited to the 5 specified kinds and cannot leak/mutate/bypass — `InterventionProposalSchema` enum-restricted `kind`; `validateIntervention` unconditionally checked; adversarial "AI intervention attempts root-cause leak" test in `v0.4.test.ts` confirms a forced leaking proposal is discarded before delivery
+- PASS backend validates every intervention proposal, not just the schema shape — `interventionValidator.ts`, 8 dedicated tests plus reuse in both providers' pipelines
+- PASS intervention budget enforced (cooldown, max count, minimum confidence, history) — all 4 covered by dedicated `v0.4.test.ts` tests (budget-of-3, cooldown, confidence floor, and the persisted `game_interventions` history itself)
+- PASS mock mode is fully deterministic and used by all automated tests — every test in `packages/ai` and `apps/server` runs with `AI_PROVIDER=mock`; only `deepseekSmokeTest.ts` (never part of the automated suite) touches the real API
+- PASS live API validation is a very small number of calls, not broad evaluation — exactly 2 new live calls added (1 classification, 1 intervention), both attempted and both hit the same documented sandbox network restriction as the pre-existing 3 calls
+- PASS intervention never leaks the root cause — leak guard reused from hypothesis evaluation, both unit-tested and integration-tested via the adversarial case above
+- PASS intervention never mutates score or bypasses the engine — structurally guaranteed (ADR-022): the proposal schema has no field capable of expressing a state mutation
+- PASS the adaptive layer never stalls or corrupts the core game loop — `runGameMasterCheck` failures are caught and logged in `clock.ts`, never propagated; confirmed by `pnpm bots` runs completing normally across all 6 scenario/difficulty combinations with the Game Master wired in and live
+- PASS architecture review conducted and meaningful findings fixed before phase completion — the scenario-specific-hardcoding bug (see above) found and fixed, with regression tests, before any new V0.4 feature code was written
+- PASS existing tests remain green — every test file that existed before this phase (50 game-engine + 33 `packages/ai` post-bugfix + 48 server) continues to pass unmodified in behavior
+- PASS new behavior has real test coverage — 19 new `packages/ai` tests (`collectiveState.test.ts` 7, `interventionValidator.test.ts` 8, plus classification/intervention cases folded into `mockProvider.test.ts` and `deepseekProvider.test.ts`) and 8 new `apps/server` tests (`v0.4.test.ts`)
+- PASS docs updated — `docs/AI_DESIGN.md` (new "Adaptive Game Master" section), `docs/DECISIONS.md` (ADR-022), `docs/DATABASE.md` (`game_interventions` table, widened `chat_messages.kind`), `docs/WEBSOCKET_PROTOCOL.md` (`ai_intervention` chat kind)
+
+**Tests run**: `packages/game-engine` 50/50 (unchanged from V0.3). `packages/ai` 69/69 (was 33 after the
+pre-V0.4 bugfix commit, +36 new: `collectiveState.test.ts` 7, `interventionValidator.test.ts` 8,
+`mockProvider.test.ts` grew from 15→29 [+14], `deepseekProvider.test.ts` grew from 8→15 [+7]).
+`apps/server` 56/56 (was 48, +8 in new `v0.4.test.ts`). Root `pnpm run build` / `pnpm run typecheck` /
+`pnpm run lint` all clean across all 5 workspace packages. Combined total across the whole monorepo:
+**175 automated tests, all passing.**
+
+**Runtime verification**: `pnpm bots` run live against the server with `AI_PROVIDER=mock` — server log
+confirms `runGameMasterCheck` fired mid-game and correctly classified/delivered a real
+`IGNORING_CRITICAL_SIGNAL` intervention (`intervened: true, reason: "delivered"`), and the full
+room-creation-to-scored-debrief loop still completed normally afterward (score 87/100) — the Game
+Master added a chat message and nothing else broke or was blocked. A separate Playwright browser run
+(3 real player sessions, demo-duration game, ~55s real-time wait past the first classification window)
+confirmed the negative case just as clearly: with no investigation activity yet, the team was correctly
+classified `INSUFFICIENT_EVIDENCE` (`intervened: false, reason: "classification is not
+intervention-eligible"`) rather than a false/premature nudge — i.e. the system's default is silence,
+not chattiness, exactly as designed.
+
+**DeepSeek calls made this phase**: 2 new live calls attempted (`classifyTeamState`,
+`proposeIntervention`, via `deepseekSmokeTest.ts`), alongside the pre-existing 3. All 5 hit the
+sandbox's `403 Host not in allowlist: api.deepseek.com` network restriction (same root cause as V0.1,
+re-confirmed with a real `DEEPSEEK_API_KEY` present and via a direct `curl` to the API). The
+graceful-fallback path was verified for real for both new operations: genuine network failures, caught
+correctly, degraded to `MockAIProvider`, valid schema-conforming results returned with
+`meta.usedFallback: true`. No workaround was attempted (bypassing the proxy is out of bounds
+regardless of reason). Real DeepSeek response quality for `classifyTeamState`/`proposeIntervention`
+was **not** verified this session — same documented gap as the original 3 operations.
+
+**Approximate spend this phase**: $0.00 (a network-layer 403 is never billed — the request never
+reached the model). Cumulative: **$0.00 of $8.00**.
+
+**Bugs found**: the scenario-specific-hardcoding bug described above and in commit `1c8efed` (found
+during this phase's architecture review, fixed and regression-tested before any new V0.4 feature code
+was written, so it's recorded as a fix that happened *during* V0.4 even though its root cause predates
+it). No new bugs found in the V0.4 feature code itself during this phase's review/testing.
+
+**Architecture changes**: two new files establish a clean boundary — `packages/ai/src/collectiveState.ts`
+(pure, no I/O, game-engine-adjacent) and `apps/server/src/services/gameMasterService.ts` (the only
+place classify → propose → validate → budget → deliver is orchestrated; sockets/clock.ts calls it and
+nothing else does). `ScenarioDefinition` gained a `scoringHints` field (part of the pre-existing-bug
+fix, not new V0.4 surface, but shipped in this phase) making per-scenario keyword-based heuristics a
+declared part of the scenario's own data rather than an assumption baked into `packages/ai`. ADR-022
+records the "interventions are chat-messages-only, no new mutation type" decision explicitly.
+
+**Known remaining limitations**: the Game Master's classification heuristic (mock mode) and its
+templated intervention messages are, like every other mock heuristic in this project, a testable
+approximation, not a substitute for the real model's judgment — real DeepSeek classification/
+intervention quality is unverified in this environment (see "DeepSeek calls made this phase"). The
+intervention budget/cooldown/confidence values (3 / 60s / 0.5) are fixed constants, not tuned against
+real playtesting data or configurable per scenario/difficulty.
+
+---
+
+(V0.5 onward recorded below as each phase completes.)

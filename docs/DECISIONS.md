@@ -507,3 +507,33 @@ for the adversarial coverage, including a stale `final:submit` fired after remat
 through V0.6) would probably want completed games to remain independently addressable/linkable rather
 than being superseded in place — at that point rematch might become "create a new room, pre-filled from
 the old one" instead of an in-place phase transition.
+
+---
+
+## ADR-022: Adaptive Game Master interventions are delivered as chat messages, never a new mutation type
+
+**Context**: V0.4 added an AI capability (see `docs/AI_DESIGN.md` "Adaptive Game Master") that can
+decide, mid-game, to nudge the team. The most flexible implementation would give the AI some way to
+directly affect game state — e.g. unlock a piece of evidence early, inject a fabricated timeline event,
+or adjust a score. That flexibility is exactly the risk V0.4.3 explicitly rules out ("AI may NOT...
+mutate score, bypass game engine").
+
+**Chosen approach**: an intervention has exactly one effect on the game, unconditionally: it becomes a
+`chat_messages` row with `kind: "ai_intervention"`, broadcast the same way a scripted timeline event's
+system message already is (`gameService.deliverInterventionChatMessage`, `sockets/clock.ts`). There is
+no second code path. The AI's `InterventionProposal` output is a `{kind, message, targetRole,
+confidence}` object; nothing about it can name an evidence id to unlock, a hypothesis to alter, or a
+score to adjust, because those fields simply don't exist in the schema (`packages/ai/src/schemas.ts`).
+
+**Why**: this makes "the AI may not bypass the game engine" true by construction rather than by
+runtime policy check. A policy check can have a bug; a data model with no field for "unlock this
+evidence id" cannot accidentally unlock evidence no matter what the model returns. It also means
+`validateIntervention` (`packages/ai/src/interventionValidator.ts`) only has to validate *message
+content* (leak-guard, id-smuggling) — there is no second category of "does this proposal try to do
+something structurally dangerous" to check, because the proposal shape can't express anything
+structurally dangerous in the first place.
+
+**What would make us reconsider**: a genuinely richer intervention (e.g. "surface one extra,
+authored-in-advance optional evidence item early") would need a deliberately narrow new mutation type
+with its own validation — not a general "AI can mutate state" escape hatch — and should only be
+considered once chat-message-only interventions have been played and found insufficient.

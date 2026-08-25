@@ -1,8 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildScenario } from "@raid/game-engine";
 import { DeepSeekProvider } from "../deepseekProvider.js";
+import type { CollectiveReasoningState } from "../collectiveState.js";
 
 const scenario = buildScenario("checkout-degradation", 1200);
+
+const state: CollectiveReasoningState = {
+  elapsedSeconds: 300,
+  durationSeconds: 1200,
+  discoveredEvidence: scenario.evidence.slice(0, 4).map((e) => ({ id: e.id, title: e.title, category: e.category })),
+  activeHypotheses: [{ text: "A plausible direction", status: "PLAUSIBLE" }],
+  challengedHypotheses: [],
+  ruledOutHypotheses: [],
+  openQuestions: [],
+  knownFacts: [],
+  toolsExecuted: [],
+  recentTrajectory: [{ atSeconds: 250, summary: "Ran a tool" }],
+  subsystemCoverage: { backend_engineer: 0.4 },
+};
 
 function chatResponse(content: string) {
   return {
@@ -181,5 +196,97 @@ describe("DeepSeekProvider malformed-output handling", () => {
         knownFacts: [],
       }),
     ).resolves.toMatchObject({ meta: { usedFallback: true, success: false } });
+  });
+});
+
+describe("DeepSeekProvider classifyTeamState / proposeIntervention (V0.4)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("succeeds on a well-formed classification response", async () => {
+    const good = JSON.stringify({ classification: "ON_TRACK", confidence: 0.8, rationale: "Evidence is accumulating steadily across roles." });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(good));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { result, meta } = await provider.classifyTeamState({ scenario, state });
+    expect(meta.usedFallback).toBe(false);
+    expect(result.classification).toBe("ON_TRACK");
+  });
+
+  it("falls back when the model returns an invalid classification enum value", async () => {
+    const bad = JSON.stringify({ classification: "PANICKING", confidence: 0.5, rationale: "not a real classification value" });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(bad));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { meta } = await provider.classifyTeamState({ scenario, state });
+    expect(meta.usedFallback).toBe(true);
+  });
+
+  it("rejects a classification rationale that leaks the root cause, then falls back", async () => {
+    const leak = JSON.stringify({
+      classification: "ON_TRACK",
+      confidence: 0.9,
+      rationale: "This is an N+1 issue hitting loyalty_history causing connection pool exhaustion.",
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(leak));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { meta } = await provider.classifyTeamState({ scenario, state });
+    expect(meta.usedFallback).toBe(true);
+  });
+
+  it("succeeds on a well-formed, safe intervention proposal", async () => {
+    const good = JSON.stringify({
+      shouldIntervene: true,
+      kind: "OPTIONAL_HINT",
+      message: "One of the readings already on the board might be worth a second look.",
+      targetRole: null,
+      confidence: 0.6,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(good));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { result, meta } = await provider.proposeIntervention({ scenario, state, classification: "IGNORING_CRITICAL_SIGNAL" });
+    expect(meta.usedFallback).toBe(false);
+    expect(result.shouldIntervene).toBe(true);
+  });
+
+  it("rejects an intervention proposal that references a real evidence id verbatim, then falls back", async () => {
+    const leaking = JSON.stringify({
+      shouldIntervene: true,
+      kind: "OPTIONAL_HINT",
+      message: `Take another look at ${scenario.evidence[0]!.id}.`,
+      targetRole: null,
+      confidence: 0.6,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(leaking));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { meta } = await provider.proposeIntervention({ scenario, state, classification: "STALLED" });
+    expect(meta.usedFallback).toBe(true);
+  });
+
+  it("rejects an intervention proposal that leaks the root cause, then falls back", async () => {
+    const leaking = JSON.stringify({
+      shouldIntervene: true,
+      kind: "OPTIONAL_HINT",
+      message: "This is an N+1 issue hitting loyalty_history causing connection pool exhaustion.",
+      targetRole: null,
+      confidence: 0.6,
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(leaking));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { meta } = await provider.proposeIntervention({ scenario, state, classification: "STALLED" });
+    expect(meta.usedFallback).toBe(true);
+  });
+
+  it("accepts a clean decline (shouldIntervene: false) without triggering the leak/id checks", async () => {
+    const clean = JSON.stringify({ shouldIntervene: false, kind: null, message: null, targetRole: null, confidence: 0.9 });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(clean));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { result, meta } = await provider.proposeIntervention({ scenario, state, classification: "INSUFFICIENT_EVIDENCE" });
+    expect(meta.usedFallback).toBe(false);
+    expect(result.shouldIntervene).toBe(false);
   });
 });

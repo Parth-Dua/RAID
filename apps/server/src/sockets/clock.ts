@@ -2,14 +2,25 @@ import type { Server } from "socket.io";
 import type { Database } from "../db/client.js";
 import { loadActiveGame } from "../services/gameLoader.js";
 import { finalizeGame, systemChatMessage } from "../services/gameService.js";
+import { runGameMasterCheck } from "../services/gameMasterService.js";
 import { emitFinalEvaluated, emitGameCompleted, emitGameEvent, emitGameSnapshotToRoom, emitTimerUpdate } from "./emit.js";
 import { logger } from "../logger.js";
 
 const TICK_MS = 5000;
 
+/** How often (in simulation seconds) the adaptive Game Master re-classifies the team's state.
+ * Deliberately coarse — this is an AI call (mock or live) on every fire, not a per-tick check.
+ * Scaled to the scenario's duration so a 5-minute demo and a 20-minute standard game both get a
+ * handful of checks rather than one config value being too frequent for one and too sparse for
+ * the other; floored so even the 60s "instant" bot-simulation preset gets at least one check. */
+function gameMasterIntervalSeconds(durationSeconds: number): number {
+  return Math.max(15, Math.round(durationSeconds * 0.15));
+}
+
 interface ClockState {
   interval: NodeJS.Timeout;
   lastTimelineIndex: number;
+  lastGameMasterCheckSeconds: number;
 }
 
 const clocks = new Map<string, ClockState>();
@@ -26,7 +37,7 @@ const clocks = new Map<string, ClockState>();
  */
 export function startClock(io: Server, db: Database, roomId: string, gameId: string): void {
   if (clocks.has(gameId)) return;
-  const state: ClockState = { interval: undefined as unknown as NodeJS.Timeout, lastTimelineIndex: 0 };
+  const state: ClockState = { interval: undefined as unknown as NodeJS.Timeout, lastTimelineIndex: 0, lastGameMasterCheckSeconds: 0 };
   state.interval = setInterval(() => void tick(io, db, roomId, gameId, state), TICK_MS);
   clocks.set(gameId, state);
 }
@@ -59,6 +70,23 @@ async function tick(io: Server, db: Database, roomId: string, gameId: string, st
       const msg = await systemChatMessage(db, gameId, `[T+${step.atSeconds}s] ${step.headline}`);
       if (msg) emitGameEvent(io, roomId, { kind: "chat", message: msg });
       state.lastTimelineIndex++;
+    }
+
+    const gmInterval = gameMasterIntervalSeconds(scenario.durationSeconds);
+    if (elapsedSeconds - state.lastGameMasterCheckSeconds >= gmInterval) {
+      state.lastGameMasterCheckSeconds = elapsedSeconds;
+      try {
+        const outcome = await runGameMasterCheck(db, gameId);
+        logger.info({ gameId, classification: outcome.classification, intervened: outcome.intervened, reason: outcome.reason }, "game master check");
+        if (outcome.intervened && outcome.chatMessage) {
+          emitGameEvent(io, roomId, { kind: "chat", message: outcome.chatMessage });
+        }
+      } catch (err) {
+        // The adaptive Game Master is a nice-to-have on top of the core game loop, never a
+        // dependency of it - a classification/AI failure here must never stall the timer, evidence
+        // unlocks, or finalization, so it's caught and logged rather than propagated.
+        logger.error({ err, gameId }, "game master check failed");
+      }
     }
 
     if (remainingSeconds <= 0) {

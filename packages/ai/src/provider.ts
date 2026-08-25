@@ -1,5 +1,6 @@
 import type { ScenarioDefinition } from "@raid/shared";
-import type { DebriefContent, FinalEvaluation, HypothesisEvaluation } from "./schemas.js";
+import type { CollectiveReasoningState } from "./collectiveState.js";
+import type { DebriefContent, FinalEvaluation, HypothesisEvaluation, InterventionProposal, TeamStateClassificationResult } from "./schemas.js";
 
 export interface HypothesisEvaluationInput {
   scenario: ScenarioDefinition;
@@ -34,7 +35,7 @@ export interface DebriefInput {
 
 export interface AIInvocationMeta {
   requestId: string;
-  operation: "evaluateHypothesis" | "evaluateFinalDiagnosis" | "generateDebrief";
+  operation: "evaluateHypothesis" | "evaluateFinalDiagnosis" | "generateDebrief" | "classifyTeamState" | "proposeIntervention";
   latencyMs: number;
   provider: "mock" | "deepseek";
   success: boolean;
@@ -42,8 +43,26 @@ export interface AIInvocationMeta {
   errorMessage?: string;
 }
 
+export interface TeamStateClassificationInput {
+  scenario: ScenarioDefinition;
+  state: CollectiveReasoningState;
+}
+
+export interface InterventionProposalInput {
+  scenario: ScenarioDefinition;
+  state: CollectiveReasoningState;
+  classification: TeamStateClassificationResult["classification"];
+}
+
 export interface AIProvider {
   evaluateHypothesis(input: HypothesisEvaluationInput): Promise<{ result: HypothesisEvaluation; meta: AIInvocationMeta }>;
   evaluateFinalDiagnosis(input: FinalEvaluationInput): Promise<{ result: FinalEvaluation; meta: AIInvocationMeta }>;
   generateDebrief(input: DebriefInput): Promise<{ result: DebriefContent; meta: AIInvocationMeta }>;
+  /** V0.4.2: classify the team's current investigative state from a bounded collective-reasoning
+   * snapshot — never raw chat, never per-role private evidence content. */
+  classifyTeamState(input: TeamStateClassificationInput): Promise<{ result: TeamStateClassificationResult; meta: AIInvocationMeta }>;
+  /** V0.4.3: given an intervention-eligible classification, propose (or decline) a safe,
+   * budget/cooldown-gated nudge. The caller (gameMasterService) still runs backend validation and
+   * enforces the intervention budget before ever delivering this to players. */
+  proposeIntervention(input: InterventionProposalInput): Promise<{ result: InterventionProposal; meta: AIInvocationMeta }>;
 }

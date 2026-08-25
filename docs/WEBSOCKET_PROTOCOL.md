@@ -54,7 +54,7 @@ security boundary (see docs/DECISIONS.md Redis ADR for why this is in-memory, no
 |---|---|---|---|
 | `room:snapshot` | `RoomSnapshot` (full player list, phase, code, current `scenarioId`) | all sockets in `room:<roomId>` | on connect, disconnect, ready toggle, host transfer, game start/complete, rematch |
 | `game:snapshot` | `GameSnapshot` — **personalized per player** (own role, own unlocked evidence, own tools, the game's `difficulty`) | sent individually to each socket (`io.to(socket.id)`), never broadcast as one shared payload | on connect (if game exists), on game start, on final evaluation |
-| `game:event` | `{kind:"chat", message} \| {kind:"known_fact", fact} \| {kind:"timeline_step", step}` | broadcast to `room:<roomId>` | on chat send, known-fact add, and every deterministic timeline reveal (server clock tick) |
+| `game:event` | `{kind:"chat", message} \| {kind:"known_fact", fact} \| {kind:"timeline_step", step}` | broadcast to `room:<roomId>` | on chat send, known-fact add, every deterministic timeline reveal, and every delivered V0.4 adaptive Game Master intervention (all three arrive as `{kind:"chat", message}` — a `ChatMessage.kind` of `"player"`, `"system"`, or `"ai_intervention"` tells them apart client-side) |
 | `timer:update` | `{ remainingSeconds: number }` | broadcast | every 5s while `ACTIVE` |
 | `evidence:unlocked` | `PublicEvidence[]` | **private**, sent only to the executing player's socket | after `tool:execute` newly unlocks evidence |
 | `hypothesis:updated` | `Hypothesis` | broadcast | on create (status `OPEN`), on AI evaluation completing, on support/challenge, on evidence attach |

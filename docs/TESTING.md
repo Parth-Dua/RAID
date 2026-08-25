@@ -7,23 +7,27 @@ requires network access. `.env.test` (gitignored, `apps/server/.env.test`) point
 ## Commands and what they actually cover (run in this session)
 
 ```bash
-# packages/game-engine - state machine, scoring, scenario unlock logic, scenario quality checklist
+# packages/game-engine - state machine, scoring, scenario unlock logic, scenario quality checklist,
+# difficulty transform (V0.3)
 cd packages/game-engine && pnpm exec vitest run
-# 4 files, 20/20 tests passed
+# 5 files, 50/50 tests passed
 
-# packages/ai - mock provider behavior, leak guard, DeepSeek malformed-output handling
+# packages/ai - mock provider behavior, leak guard, DeepSeek malformed-output handling,
+# collective reasoning state + intervention validation (V0.4)
 cd packages/ai && pnpm exec vitest run
-# 3 files, 18/18 tests passed
+# 5 files, 69/69 tests passed
 
-# apps/server - REST, concurrency races, security/privacy, full game flow + reconnect + auto-finalize
+# apps/server - REST, concurrency races, security/privacy, full game flow + reconnect + auto-finalize,
+# scenario selection + rematch (V0.3), adaptive Game Master orchestration (V0.4)
 cd apps/server && NODE_ENV=test pnpm exec vitest run
-# 4 files, 24/24 tests passed (one file takes ~65s: it genuinely waits out a real 60s
+# 8 files, 56/56 tests passed (one file takes ~65s: it genuinely waits out a real 60s
 # "instant"-preset timer to prove auto-finalization fires without a submission)
 ```
 
-62 tests total, all green as of the last full run in this session (see `docs/REVIEW_NOTES.md` for the
-handful of real bugs these caught and fixed along the way — several of the concurrency/security tests
-failed on their first run for genuine reasons, not test bugs).
+175 tests total across the monorepo, all green as of the last full run (V0.4) — see
+`docs/REVIEW_NOTES.md` for the handful of real bugs these caught and fixed along the way (several of
+the original concurrency/security tests failed on their first run for genuine reasons, not test bugs),
+and each phase's entry in `docs/MILESTONES.md` for what was added and why per phase.
 
 ### Why `apps/server`'s vitest.config.ts sets `fileParallelism: false`
 
@@ -70,6 +74,16 @@ attempt succeeds).
   rematch is rejected outside COMPLETED; a full rematch → new scenario → new game cycle produces a
   fresh `gameId` and fresh role assignment with zero leakage from the old game; a stale `final:submit`
   fired against an already-rematched room is rejected rather than corrupting the new LOBBY room.
+- `v0.4.test.ts` (V0.4) — a non-intervention-eligible classification (`ON_TRACK`) never even calls
+  `proposeIntervention`; `SOLVING_TOO_QUICKLY`/`INSUFFICIENT_EVIDENCE` also never intervene; a valid
+  intervention is delivered as an `ai_intervention` chat message and recorded in `game_interventions`
+  history; a proposal that leaks the root cause is discarded before delivery (the adversarial "AI
+  intervention attempts root-cause leak" case); a below-threshold-confidence proposal is discarded; the
+  AI's own decision not to intervene is respected; the per-game budget (max 3) is enforced; the
+  60-second cooldown between deliveries is enforced. Classification/proposal results are forced via
+  `vi.spyOn(aiProvider, ...)` so this file tests the budget/cooldown/validation *orchestration* in
+  `gameMasterService.ts` directly and deterministically — the classification heuristic itself is
+  exhaustively covered at the `packages/ai` unit level instead (`mockProvider.test.ts`).
 
 **System-level (`apps/server/src/scripts/botSimulation.ts`)**: not a vitest suite — a standalone
 script that drives 4 real `socket.io-client` connections through the *actual* REST + Socket.IO API
@@ -107,6 +121,13 @@ checkout-degradation's) and for rematch (submit final answer → debrief renders
 again with this group" → room returns to a clean LOBBY with the scenario picker visible again and no
 leftover debrief content from the previous round).
 
+V0.4's adaptive Game Master was runtime-verified two ways: a `pnpm bots` run whose server log shows
+`runGameMasterCheck` firing mid-game, correctly classifying the team's state, and delivering a real
+intervention (confirmed by the bot script's full loop still completing normally, score 87/100,
+afterward); and a Playwright run confirming the negative case — a team with no investigation activity
+yet is classified `INSUFFICIENT_EVIDENCE` and correctly gets no intervention, rather than a premature
+or spammy one. See `docs/MILESTONES.md`'s V0.4 entry for the exact log lines and reasoning.
+
 ## Failure-mode tests specifically (spec section 34 "Failure tests")
 
 | Required case | Where it's covered |
@@ -118,6 +139,9 @@ leftover debrief content from the previous round).
 | Invalid room | `rooms.rest.test.ts` "rejects joining a nonexistent room" |
 | Expired/invalid session | `security.test.ts` socket-authentication tests |
 | Invalid phase transition | `concurrency.test.ts` host-double-start; `packages/game-engine` state-machine unit tests for the illegal-transition cases directly |
+| AI intervention attempts root-cause leak (V0.4) | `interventionValidator.test.ts` (unit) and `v0.4.test.ts` "discards ... an intervention proposal that leaks the root cause" (integration, via `runGameMasterCheck`) |
+| Generated scenario references missing evidence / broken unlock graph | not yet applicable — scenario generation ships in V0.5; will be covered there |
+| Rematch while old events are in flight | `v0.3.test.ts` "a stale final:submit against an already-completed, already-rematched game is rejected" |
 
 ## Known gaps
 

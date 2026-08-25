@@ -37,7 +37,7 @@ export async function resetDatabase(): Promise<void> {
   await db.execute(sql`
     TRUNCATE TABLE
       game_results, final_submissions, hypothesis_evidence, hypothesis_reactions,
-      hypotheses, known_facts, chat_messages, tool_actions, game_evidence,
+      hypotheses, known_facts, chat_messages, tool_actions, game_evidence, game_interventions,
       game_players, games, game_events, players, rooms
     RESTART IDENTITY CASCADE
   `);

@@ -4,19 +4,25 @@
  * AI_PROVIDER=mock, per docs/AI_DESIGN.md cost discipline) - this is a manual
  * verification script, run once, to confirm the actual DeepSeek integration
  * works end-to-end against the real network API before calling it "done".
+ * Calls 4-5 (V0.4) cover classifyTeamState/proposeIntervention - the "VERY SMALL number of live
+ * requests" V0.4.6 calls for: just enough to check schema compliance and the qualitative
+ * sanity of one classification and one intervention proposal against the real model.
  *
  * NOTE: this could not be run to a real success in the sandboxed dev environment
  * this project was built in - its outbound network proxy does not have
  * api.deepseek.com in its egress allowlist (confirmed via a 403 "Host not in
- * allowlist" error, not a code bug). The graceful-fallback path itself was
- * verified for real by this exact failure: every call below fell back to
- * MockAIProvider automatically and the script still completed successfully.
- * See docs/AI_DESIGN.md / docs/EVALUATION.md for the full writeup. Run this
- * from an environment with open egress to confirm live DeepSeek behavior.
+ * allowlist" error, not a code bug). Re-confirmed unchanged during V0.4 (calls
+ * 4-5 below, classifyTeamState/proposeIntervention, hit the identical 403). The
+ * graceful-fallback path itself was verified for real by this exact failure:
+ * every call below fell back to MockAIProvider automatically and the script
+ * still completed successfully, at $0.00 spend (a network-layer 403 is never
+ * billed - the request never reached the model). See docs/AI_DESIGN.md /
+ * docs/EVALUATION.md / docs/MILESTONES.md for the full writeup. Run this from
+ * an environment with open egress to confirm live DeepSeek response quality.
  *
  * Usage: DEEPSEEK_API_KEY=... tsx src/scripts/deepseekSmokeTest.ts
  */
-import { DeepSeekProvider } from "@raid/ai";
+import { DeepSeekProvider, buildCollectiveReasoningState } from "@raid/ai";
 import { buildScenario, DURATION_PRESETS } from "@raid/game-engine";
 
 async function main() {
@@ -76,8 +82,47 @@ async function main() {
   console.log("rationale:", final.result.rationale);
   console.log("meta:", JSON.stringify(final.meta));
 
-  console.log("\nDONE - all calls used provider:", h.meta.provider, h2.meta.provider, final.meta.provider);
-  console.log("usedFallback (should be false for all if the real API responded validly):", h.meta.usedFallback, h2.meta.usedFallback, final.meta.usedFallback);
+  console.log("\n--- Real call 4 (V0.4): classifyTeamState on a mid-investigation state ---");
+  const state = buildCollectiveReasoningState({
+    scenario,
+    elapsedSeconds: 400,
+    unlockedEvidenceIds: new Set(["be_deploy_log", "be_trace_n1", "db_pool_saturation"]),
+    hypotheses: [],
+    knownFacts: [],
+    executedToolIds: new Set(["deployments", "distributed_traces", "active_connections"]),
+    recentEvents: [
+      { atSeconds: 60, type: "TOOL_EXECUTED", payload: { toolId: "deployments" } },
+      { atSeconds: 120, type: "TOOL_EXECUTED", payload: { toolId: "distributed_traces" } },
+      { atSeconds: 300, type: "TOOL_EXECUTED", payload: { toolId: "active_connections" } },
+    ],
+  });
+  const classification = await provider.classifyTeamState({ scenario, state });
+  console.log("classification:", classification.result.classification, "confidence:", classification.result.confidence);
+  console.log("rationale:", classification.result.rationale);
+  console.log("meta:", JSON.stringify(classification.meta));
+
+  console.log("\n--- Real call 5 (V0.4): proposeIntervention for a STALLED-eligible state ---");
+  const intervention = await provider.proposeIntervention({ scenario, state, classification: "STALLED" });
+  console.log("shouldIntervene:", intervention.result.shouldIntervene);
+  console.log("kind:", intervention.result.kind, "message:", intervention.result.message, "targetRole:", intervention.result.targetRole);
+  console.log("meta:", JSON.stringify(intervention.meta));
+
+  console.log(
+    "\nDONE - all calls used provider:",
+    h.meta.provider,
+    h2.meta.provider,
+    final.meta.provider,
+    classification.meta.provider,
+    intervention.meta.provider,
+  );
+  console.log(
+    "usedFallback (should be false for all if the real API responded validly):",
+    h.meta.usedFallback,
+    h2.meta.usedFallback,
+    final.meta.usedFallback,
+    classification.meta.usedFallback,
+    intervention.meta.usedFallback,
+  );
 }
 
 main().catch((err) => {

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { computeToolResult, isToolAuthorizedForRole, toPublicEvidence, visibleEvidenceForRole } from "@raid/game-engine";
+import { computeSimulationSeconds, computeToolResult, isToolAuthorizedForRole, toPublicEvidence, visibleEvidenceForRole } from "@raid/game-engine";
 import type { ChatMessage, Debrief, GameSnapshot, Hypothesis, KnownFact, Role } from "@raid/shared";
+import type { CollectiveReasoningState, RawTrajectoryEvent, RawTrajectoryEventType } from "@raid/ai";
+import { buildCollectiveReasoningState } from "@raid/ai";
 import type { Database } from "../db/client.js";
 import { RaidError } from "../domain/errors.js";
 import { toChatMessage, toKnownFact } from "../domain/mappers.js";
@@ -8,7 +10,7 @@ import * as gamesRepo from "../repositories/gamesRepo.js";
 import * as contentRepo from "../repositories/gameContentRepo.js";
 import * as hypothesesRepo from "../repositories/hypothesesRepo.js";
 import * as finalRepo from "../repositories/finalRepo.js";
-import { appendEvent } from "../repositories/eventsRepo.js";
+import { appendEvent, findEventsForGame } from "../repositories/eventsRepo.js";
 import { aiProvider } from "./aiService.js";
 import { loadActiveGame } from "./gameLoader.js";
 import { logger } from "../logger.js";
@@ -90,6 +92,46 @@ async function loadHypotheses(db: Database, gameId: string): Promise<Hypothesis[
     createdAt: h.createdAt.toISOString(),
     version: h.version,
   }));
+}
+
+const TRAJECTORY_EVENT_TYPES = new Set<string>(["TOOL_EXECUTED", "EVIDENCE_UNLOCKED", "HYPOTHESIS_CREATED", "KNOWN_FACT_ADDED"]);
+
+/**
+ * Assembles the bounded collective-reasoning snapshot the adaptive Game Master (V0.4) reasons
+ * over — read-side only, never mutates anything. Reuses the same repos `buildGameSnapshotForPlayer`
+ * does, but team-wide (every unlocked evidence item regardless of role, every hypothesis, every
+ * known fact) rather than filtered to one player's private view, since the Game Master reasons
+ * about what the TEAM has collectively surfaced, not what any one role can see.
+ */
+export async function buildCollectiveStateForGame(db: Database, gameId: string): Promise<{ state: CollectiveReasoningState; elapsedSeconds: number }> {
+  const { gameRow, scenario, elapsedSeconds } = await loadActiveGame(db, gameId);
+  const unlockedEvidenceIds = await contentRepo.findUnlockedEvidenceIds(db, gameId);
+  const executedToolIds = await contentRepo.findExecutedToolIds(db, gameId);
+  const hypotheses = await loadHypotheses(db, gameId);
+  const knownFactRows = await contentRepo.findKnownFacts(db, gameId);
+  const knownFacts = knownFactRows.map(toKnownFact);
+
+  const eventRows = await findEventsForGame(db, gameId);
+  const startedAtMs = gameRow.startedAt?.getTime() ?? Date.now();
+  const recentEvents: RawTrajectoryEvent[] = eventRows
+    .filter((ev) => TRAJECTORY_EVENT_TYPES.has(ev.type))
+    .map((ev) => {
+      const payload = ev.payload as Record<string, unknown>;
+      const atSeconds =
+        typeof payload.elapsedSeconds === "number" ? payload.elapsedSeconds : computeSimulationSeconds(startedAtMs, ev.createdAt.getTime());
+      return { atSeconds, type: ev.type as RawTrajectoryEventType, payload };
+    });
+
+  const state = buildCollectiveReasoningState({
+    scenario,
+    elapsedSeconds,
+    unlockedEvidenceIds,
+    hypotheses,
+    knownFacts,
+    executedToolIds,
+    recentEvents,
+  });
+  return { state, elapsedSeconds };
 }
 
 // ---------------- Tool execution ----------------
@@ -287,6 +329,20 @@ export async function systemChatMessage(db: Database, gameId: string, text: stri
     authorName: "RAID",
     text,
     kind: "system",
+    clientMsgId: randomUUID(),
+  });
+  return row ? toChatMessage(row) : null;
+}
+
+/** V0.4: delivers an already-validated, budget-approved intervention as a distinctly-kinded chat
+ * message. This is the ONLY way an intervention reaches players - see gameMasterService.ts. */
+export async function deliverInterventionChatMessage(db: Database, gameId: string, text: string): Promise<ChatMessage | null> {
+  const row = await contentRepo.insertChatMessage(db, {
+    gameId,
+    authorId: null,
+    authorName: "RAID Game Master",
+    text,
+    kind: "ai_intervention",
     clientMsgId: randomUUID(),
   });
   return row ? toChatMessage(row) : null;
