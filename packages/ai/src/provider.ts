@@ -1,6 +1,14 @@
-import type { ScenarioDefinition } from "@raid/shared";
+import type { Difficulty, ScenarioDefinition } from "@raid/shared";
 import type { CollectiveReasoningState } from "./collectiveState.js";
-import type { DebriefContent, FinalEvaluation, HypothesisEvaluation, InterventionProposal, TeamStateClassificationResult } from "./schemas.js";
+import type {
+  DebriefContent,
+  FinalEvaluation,
+  GeneratedScenario,
+  HypothesisEvaluation,
+  InterventionProposal,
+  SemanticReview,
+  TeamStateClassificationResult,
+} from "./schemas.js";
 
 export interface HypothesisEvaluationInput {
   scenario: ScenarioDefinition;
@@ -35,7 +43,14 @@ export interface DebriefInput {
 
 export interface AIInvocationMeta {
   requestId: string;
-  operation: "evaluateHypothesis" | "evaluateFinalDiagnosis" | "generateDebrief" | "classifyTeamState" | "proposeIntervention";
+  operation:
+    | "evaluateHypothesis"
+    | "evaluateFinalDiagnosis"
+    | "generateDebrief"
+    | "classifyTeamState"
+    | "proposeIntervention"
+    | "generateScenario"
+    | "semanticReviewScenario";
   latencyMs: number;
   provider: "mock" | "deepseek";
   success: boolean;
@@ -54,6 +69,17 @@ export interface InterventionProposalInput {
   classification: TeamStateClassificationResult["classification"];
 }
 
+export interface ScenarioGenerationInput {
+  /** A free-text request, e.g. "Create an intermediate Kubernetes incident caused by a broken
+   * readiness configuration." Never trusted as anything but generation-prompt content. */
+  description: string;
+  difficulty?: Difficulty;
+}
+
+export interface SemanticReviewInput {
+  candidate: GeneratedScenario;
+}
+
 export interface AIProvider {
   evaluateHypothesis(input: HypothesisEvaluationInput): Promise<{ result: HypothesisEvaluation; meta: AIInvocationMeta }>;
   evaluateFinalDiagnosis(input: FinalEvaluationInput): Promise<{ result: FinalEvaluation; meta: AIInvocationMeta }>;
@@ -65,4 +91,16 @@ export interface AIProvider {
    * budget/cooldown-gated nudge. The caller (gameMasterService) still runs backend validation and
    * enforces the intervention budget before ever delivering this to players. */
   proposeIntervention(input: InterventionProposalInput): Promise<{ result: InterventionProposal; meta: AIInvocationMeta }>;
+  /** V0.5.1/V0.5.5: generate a difficulty-neutral scenario candidate from a free-text request. The
+   * GENERATE -> VALIDATE -> REPAIR -> REVALIDATE loop (V0.5.5) is implemented via the same
+   * schema-failure/semantic-failure repair-prompt retry every other operation already has
+   * (DeepSeekProvider's `run()`) — here the "semantic" check IS the deterministic structural
+   * validator (`validateGeneratedScenario`), so a structurally broken candidate triggers a bounded
+   * number of in-conversation repair retries before ever reaching the caller. */
+  generateScenario(input: ScenarioGenerationInput): Promise<{ result: GeneratedScenario; meta: AIInvocationMeta }>;
+  /** V0.5.4: a single bounded AI review pass over an already structurally-valid candidate, checking
+   * causal consistency / role balance / answer leakage / red-herring plausibility / remediation
+   * validity / scenario coherence — the caller must never invoke this more than once per generation
+   * attempt (see docs/AI_DESIGN.md "budget-efficient live evaluation"). */
+  semanticReviewScenario(input: SemanticReviewInput): Promise<{ result: SemanticReview; meta: AIInvocationMeta }>;
 }

@@ -59,12 +59,88 @@ export const InterventionProposalSchema = z
   });
 export type InterventionProposal = z.infer<typeof InterventionProposalSchema>;
 
-/** Not exercised at MVP runtime (scenario is authored, not generated) — kept as a
- * documented extension point / schema so a future `generateScenario` call has
- * somewhere to land without inventing an unvalidated shape under time pressure. */
-export const ScenarioSeedSchema = z.object({
-  title: z.string().min(3).max(100),
-  briefing: z.string().min(20).max(600),
-  severity: z.enum(["SEV-1", "SEV-2", "SEV-3"]),
+/**
+ * V0.5.2: strict schema for an AI-generated scenario candidate — mirrors
+ * `GeneratedScenarioDefinition` (packages/shared/src/domain.ts) field-for-field. This is the shape
+ * check only ("never accept raw arbitrary content as valid"); `validateGeneratedScenario`
+ * (packages/game-engine) is the separate deterministic pass that checks cross-references (does
+ * every evidence.unlock.toolId actually name a real tool?) and executability, which a shape schema
+ * alone can't express.
+ */
+const GeneratedToolSchema = z.object({
+  id: z.string().min(1).max(60),
+  role: z.enum(ROLES),
+  name: z.string().min(1).max(80),
+  description: z.string().min(1).max(200),
+  resultSummary: z.string().min(1).max(200),
+  baselineOutput: z.string().max(400).optional(),
 });
-export type ScenarioSeed = z.infer<typeof ScenarioSeedSchema>;
+
+const GeneratedEvidenceSchema = z.object({
+  id: z.string().min(1).max(60),
+  visibleToRoles: z.array(z.enum(ROLES)).min(1).max(4),
+  title: z.string().min(1).max(120),
+  category: z.enum(["log", "metric", "trace", "deployment", "chat_note", "incident_fact"]),
+  content: z.string().min(1).max(1200),
+  hint: z.string().max(300).optional(),
+  unlock: z.object({
+    toolId: z.string().max(60).optional(),
+    atFraction: z.number().min(0).max(1).optional(),
+  }),
+  isRedHerring: z.boolean(),
+  isKeyEvidence: z.boolean(),
+});
+
+const GeneratedTimelineStepSchema = z.object({
+  atFraction: z.number().min(0).max(1),
+  headline: z.string().min(1).max(150),
+  detail: z.string().max(300).optional(),
+});
+
+const RubricWeightsSchema = z.object({
+  rootCauseAccuracy: z.number().min(0).max(100),
+  evidenceQuality: z.number().min(0).max(100),
+  remediationQuality: z.number().min(0).max(100),
+  efficiency: z.number().min(0).max(100),
+  collaboration: z.number().min(0).max(100),
+});
+
+export const GeneratedScenarioSchema = z.object({
+  id: z
+    .string()
+    .min(3)
+    .max(60)
+    .regex(/^[a-z0-9-]+$/, "id must be a lowercase-hyphen slug"),
+  title: z.string().min(3).max(100),
+  severity: z.enum(["SEV-1", "SEV-2", "SEV-3"]),
+  briefing: z.string().min(20).max(600),
+  tools: z.array(GeneratedToolSchema).min(4).max(25),
+  evidence: z.array(GeneratedEvidenceSchema).min(6).max(30),
+  timeline: z.array(GeneratedTimelineStepSchema).min(2).max(10),
+  rootCause: z.object({
+    summary: z.string().min(20).max(800),
+    causalChain: z.array(z.string().min(5).max(300)).min(4).max(10),
+    remediation: z.string().min(10).max(500),
+    keyEvidenceIds: z.array(z.string().min(1).max(60)).min(1).max(15),
+  }),
+  plausibleWrongHypotheses: z.array(z.string().min(5).max(300)).min(1).max(8),
+  rubricWeights: RubricWeightsSchema.refine((w) => Object.values(w).reduce((a, b) => a + b, 0) === 100, {
+    message: "rubricWeights must sum to 100",
+  }),
+  scoringHints: z.object({
+    causalTerms: z.array(z.string().min(1).max(60)).min(2).max(12),
+    redHerringTerms: z.array(z.string().min(1).max(60)).min(1).max(12),
+    remediationTerms: z.array(z.string().min(1).max(60)).min(1).max(12),
+    distinctiveTerms: z.array(z.string().min(1).max(60)).min(2).max(8),
+  }),
+});
+export type GeneratedScenario = z.infer<typeof GeneratedScenarioSchema>;
+
+/** V0.5.4: a single, bounded AI review pass over an already structurally-valid candidate — never a
+ * second full generation, and never run over more than one candidate per generation attempt (see
+ * docs/AI_DESIGN.md "do not spend API budget reviewing large numbers of scenarios"). */
+export const SemanticReviewSchema = z.object({
+  passed: z.boolean(),
+  issues: z.array(z.string().min(5).max(300)).max(10),
+});
+export type SemanticReview = z.infer<typeof SemanticReviewSchema>;

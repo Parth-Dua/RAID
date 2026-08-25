@@ -208,6 +208,54 @@ export interface ToolResult {
   unlockedEvidenceIds: string[];
 }
 
+/**
+ * V0.5 AI-assisted scenario generation: the difficulty-neutral, duration-neutral shape a generated
+ * scenario is produced and stored in — structurally identical to `ScenarioDefinition` except time
+ * is expressed as fractions (0-1) rather than concrete seconds, exactly the same "author once as
+ * fractions, scale at build time" pattern every hand-authored scenario already uses (see
+ * `packages/game-engine/src/scenarios/*.ts` and `materializeFractionalScenario`). This is what lets
+ * a generated scenario be played at any duration preset and either difficulty without regenerating.
+ */
+export interface GeneratedEvidenceUnlock {
+  toolId?: string;
+  /** Fraction (0-1) of the scenario's eventual duration after which this becomes available. */
+  atFraction?: number;
+}
+
+export interface GeneratedEvidenceDefinition {
+  id: string;
+  visibleToRoles: Role[];
+  title: string;
+  category: EvidenceDefinition["category"];
+  content: string;
+  hint?: string;
+  unlock: GeneratedEvidenceUnlock;
+  isRedHerring: boolean;
+  isKeyEvidence: boolean;
+}
+
+export interface GeneratedTimelineStep {
+  atFraction: number;
+  headline: string;
+  detail?: string;
+}
+
+export interface GeneratedScenarioDefinition {
+  /** A URL/id-safe slug the generator proposes; the server re-slugifies and disambiguates it
+   * against existing scenario ids before ever persisting or exposing it as a real scenarioId. */
+  id: string;
+  title: string;
+  severity: ScenarioDefinition["severity"];
+  briefing: string;
+  tools: ToolDefinition[];
+  evidence: GeneratedEvidenceDefinition[];
+  timeline: GeneratedTimelineStep[];
+  rootCause: ScenarioDefinition["rootCause"];
+  plausibleWrongHypotheses: string[];
+  rubricWeights: ScenarioRubricWeights;
+  scoringHints: ScenarioDefinition["scoringHints"];
+}
+
 export interface Hypothesis {
   id: string;
   gameId: string;

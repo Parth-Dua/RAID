@@ -1,5 +1,6 @@
 import { generateRoomCode, ROLES, type Difficulty, type Role } from "@raid/shared";
 import { assertTransition, listScenarioIds } from "@raid/game-engine";
+import * as generatedScenariosRepo from "../repositories/generatedScenariosRepo.js";
 import type { Database } from "../db/client.js";
 import { RaidError } from "../domain/errors.js";
 import { generateSessionToken } from "../domain/session.js";
@@ -169,7 +170,9 @@ export async function startGame(
   if (!room) throw new RaidError("ROOM_NOT_FOUND", "Room not found");
   if (room.hostPlayerId !== requestingPlayerId) throw new RaidError("NOT_HOST", "Only the host can start the game");
   if (room.phase !== "LOBBY") throw new RaidError("ALREADY_STARTED", "Game has already started");
-  if (!listScenarioIds().includes(scenarioId)) throw new RaidError("INVALID_PAYLOAD", `Unknown scenario: ${scenarioId}`);
+  if (!listScenarioIds().includes(scenarioId) && !(await generatedScenariosRepo.existsGeneratedScenarioId(db, scenarioId))) {
+    throw new RaidError("INVALID_PAYLOAD", `Unknown scenario: ${scenarioId}`);
+  }
 
   // Only players actually present can start or block a start: a player who joined via REST but
   // never opened a socket (or disconnected in the lobby) must not be able to hold the room hostage

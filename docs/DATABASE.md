@@ -27,6 +27,16 @@ erDiagram
     HYPOTHESES ||--o{ HYPOTHESIS_REACTIONS : receives
     HYPOTHESES ||--o{ HYPOTHESIS_EVIDENCE : cites
 
+    GENERATED_SCENARIOS {
+        uuid id PK
+        varchar scenario_id UK "V0.5 - the id used everywhere a built-in scenario id is"
+        varchar title
+        varchar severity
+        text briefing
+        jsonb definition "full GeneratedScenarioDefinition - fractional time, difficulty-neutral"
+        text requested_description
+    }
+
     ROOMS {
         uuid id PK
         varchar code UK
@@ -149,7 +159,7 @@ erDiagram
 ## Why relational columns vs. JSONB, table by table
 
 The default is a real column with a foreign key and, where the spec calls for it, a uniqueness
-constraint — JSONB is used in exactly three places, each for a specific reason:
+constraint — JSONB is used in exactly four places, each for a specific reason:
 
 1. **`game_events.payload`** — an append-only log of ~15 distinct event *types*
    (`PLAYER_JOINED`, `TOOL_EXECUTED`, `HYPOTHESIS_EVALUATED`, ...), each with a different shape.
@@ -167,6 +177,14 @@ constraint — JSONB is used in exactly three places, each for a specific reason
    finalization time; nothing ever queries into a specific field of a stored debrief, it's read back
    whole for the debrief screen. A join table across half a dozen sub-shapes would add migration
    surface for zero query benefit.
+4. **`generated_scenarios.definition`** (V0.5) — the full `GeneratedScenarioDefinition` (tools,
+   evidence, timeline, root cause, scoring hints). This is structurally the same shape a hand-authored
+   scenario module in `packages/game-engine/src/scenarios/` returns, just persisted instead of code -
+   it's read back whole and materialized by the exact same engine functions a built-in scenario uses
+   (see ADR-024), never queried by a specific nested field. Relationally decomposing an entire
+   scenario's tools/evidence/timeline into their own tables would only make sense if generated
+   scenarios needed to be edited field-by-field in place, which V0.5.7 deliberately does not support
+   (regenerate instead - see docs/AI_DESIGN.md "Scenario Authoring UI").
 
 Everything else — room/player/game relationships, role assignments, hypothesis authorship, reaction
 identities, evidence-unlock timestamps — is queried by specific fields, needs referential integrity,

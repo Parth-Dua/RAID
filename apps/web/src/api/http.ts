@@ -1,4 +1,4 @@
-import type { RoomSnapshot, ScenarioCatalogEntry } from "@raid/shared";
+import type { Difficulty, GeneratedScenarioDefinition, RoomSnapshot, ScenarioCatalogEntry } from "@raid/shared";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:4000";
 
@@ -44,6 +44,29 @@ export function getRoom(roomCode: string) {
 
 export function getScenarioCatalog() {
   return request<{ scenarios: ScenarioCatalogEntry[] }>("/api/scenarios");
+}
+
+export interface GenerateScenarioResponse {
+  candidate: GeneratedScenarioDefinition;
+  validation: { valid: boolean; errors: string[] };
+  semanticReview: { passed: boolean; issues: string[] } | null;
+  eligibleToSave: boolean;
+}
+
+/** V0.5.1: generate a scenario candidate from a free-text description. Never saves anything. */
+export function generateScenario(description: string, difficulty?: Difficulty) {
+  return request<GenerateScenarioResponse>("/api/scenarios/generate", {
+    method: "POST",
+    body: JSON.stringify({ description, difficulty }),
+  });
+}
+
+/** V0.5.7: persist a candidate already returned by `generateScenario`. */
+export function saveGeneratedScenario(candidate: GeneratedScenarioDefinition, requestedDescription?: string) {
+  return request<{ scenarioId: string; catalogEntry: ScenarioCatalogEntry }>("/api/scenarios/save", {
+    method: "POST",
+    body: JSON.stringify({ candidate, requestedDescription }),
+  });
 }
 
 export { SERVER_URL };

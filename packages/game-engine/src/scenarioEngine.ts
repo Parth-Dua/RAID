@@ -1,8 +1,18 @@
-import type { Difficulty, EvidenceDefinition, PublicEvidence, Role, ScenarioCatalogEntry, ScenarioDefinition, ToolResult } from "@raid/shared";
+import type {
+  Difficulty,
+  EvidenceDefinition,
+  GeneratedScenarioDefinition,
+  PublicEvidence,
+  Role,
+  ScenarioCatalogEntry,
+  ScenarioDefinition,
+  ToolResult,
+} from "@raid/shared";
 import { buildCheckoutDegradationScenario } from "./scenarios/checkoutDegradation.js";
 import { buildLockContentionScenario } from "./scenarios/lockContention.js";
 import { buildMemoryLeakScenario } from "./scenarios/memoryLeak.js";
 import { applyDifficulty } from "./difficulty.js";
+import { materializeGeneratedScenario } from "./fractionalScenario.js";
 
 /** A scenario builder authors ONE canonical (difficulty-neutral) definition; `buildScenario`
  * below is the only place difficulty is applied, uniformly, to whatever a builder returns - no
@@ -53,6 +63,21 @@ export function buildScenario(scenarioId: string, durationSeconds: number, diffi
   const builder = SCENARIO_REGISTRY[scenarioId];
   if (!builder) throw new Error(`Unknown scenario: ${scenarioId}`);
   const base: ScenarioDefinition = { ...builder(durationSeconds), difficulty };
+  return applyDifficulty(base, difficulty);
+}
+
+/** V0.5: the same build path as `buildScenario`, for a scenario that isn't in the static
+ * `SCENARIO_REGISTRY` because it was AI-generated and saved (apps/server resolves the DB-stored
+ * `GeneratedScenarioDefinition` and passes it here — this module stays free of any DB/I-O
+ * dependency, exactly like every other function in it). Uses the identical
+ * materialize-then-`applyDifficulty` composition as `buildScenario`, so a generated scenario is
+ * played through exactly the same engine code downstream with zero special-casing. */
+export function buildGeneratedScenario(
+  generated: GeneratedScenarioDefinition,
+  durationSeconds: number,
+  difficulty: Difficulty = "NORMAL",
+): ScenarioDefinition {
+  const base: ScenarioDefinition = { ...materializeGeneratedScenario(generated, durationSeconds), difficulty };
   return applyDifficulty(base, difficulty);
 }
 

@@ -4,6 +4,8 @@ import type {
   FinalEvaluationInput,
   HypothesisEvaluationInput,
   InterventionProposalInput,
+  ScenarioGenerationInput,
+  SemanticReviewInput,
   TeamStateClassificationInput,
 } from "./provider.js";
 
@@ -196,4 +198,91 @@ export function buildDebriefContext(input: DebriefInput): { system: string; user
       "missed or did well, not generic incident-response advice) }.",
   ].join("\n");
   return { system: SYSTEM_PREAMBLE, user };
+}
+
+const SCENARIO_AUTHOR_PREAMBLE =
+  "You are a scenario author for RAID, a cooperative incident-response game. You write realistic, " +
+  "internally-consistent production-incident scenarios for a 3-4 player team split into up to 4 " +
+  "roles (backend_engineer, database_engineer, sre, incident_commander). You respond with strict " +
+  "JSON matching the schema described in the user message — no prose outside JSON.";
+
+export function buildScenarioGenerationContext(input: ScenarioGenerationInput): { system: string; user: string } {
+  const { description, difficulty } = input;
+  const user = [
+    `Incident request: "${description}"`,
+    difficulty ? `Target difficulty: ${difficulty} (author the scenario itself difficulty-neutral regardless — ` +
+      "difficulty is applied separately by the game engine from your `hint` fields and unlock timing; just " +
+      "author every evidence item's optional `hint` normally)." : "",
+    "",
+    "Design requirements, matching the same bar every hand-authored RAID scenario meets:",
+    "- Exactly one true root cause with a causal chain of AT LEAST 4 concrete mechanical steps (deploy/config " +
+      "change -> intermediate effect -> intermediate effect -> user-facing symptom). No hand-waving steps.",
+    "- Each of backend_engineer, database_engineer, and sre needs at least 3-5 tools and at least 3-5 evidence " +
+      "items visible only to that role. incident_commander (optional - used only in 4-player games) should get " +
+      "1-2 coarse tools/evidence that say WHICH systems look unhealthy, never WHY.",
+    "- Key evidence (rootCause.keyEvidenceIds) must span AT LEAST 3 different roles - no single role's evidence " +
+      "alone should be enough to confidently diagnose the incident.",
+    "- Include 4-6 red herrings (isRedHerring: true): plausible-sounding wrong explanations, each with a " +
+      "specific evidence item that actively RULES IT OUT (not just silence on the topic).",
+    "- Evidence unlock: most evidence unlocks on a tool being run (unlock.toolId); some of the more revealing " +
+      "items should ALSO require a fraction of the incident's duration to have passed (unlock.atFraction, 0-1) " +
+      "so the investigation has pacing rather than everything being available from t=0.",
+    "- Timeline: 3-6 deterministic story beats (atFraction 0-1, ascending) describing how the incident visibly " +
+      "worsens over time, independent of what the players do.",
+    "- scoringHints: causalTerms (words/phrases that indicate genuine understanding of the mechanism), " +
+      "redHerringTerms (words associated with the wrong explanations), remediationTerms (words indicating the " +
+      "correct fix), and distinctiveTerms (2+ SHORT, mutually non-overlapping phrases specific enough that " +
+      "using 2 of them together would be reciting the mechanism verbatim - used to detect answer leakage).",
+    "- rubricWeights must be exactly {rootCauseAccuracy:40, evidenceQuality:20, remediationQuality:20, " +
+      "efficiency:10, collaboration:10}.",
+    "- id: a short lowercase-hyphen slug derived from the title (e.g. \"broken-readiness-probe\").",
+    "",
+    "Respond with JSON matching this exact shape (all fields required unless marked optional):",
+    "{",
+    '  "id": string, "title": string, "severity": "SEV-1"|"SEV-2"|"SEV-3", "briefing": string,',
+    '  "tools": [{ "id": string, "role": "backend_engineer"|"database_engineer"|"sre"|"incident_commander",',
+    '             "name": string, "description": string, "resultSummary": string, "baselineOutput"?: string }],',
+    '  "evidence": [{ "id": string, "visibleToRoles": [role,...], "title": string,',
+    '                "category": "log"|"metric"|"trace"|"deployment"|"chat_note"|"incident_fact",',
+    '                "content": string, "hint"?: string,',
+    '                "unlock": { "toolId"?: string, "atFraction"?: number }, "isRedHerring": boolean, "isKeyEvidence": boolean }],',
+    '  "timeline": [{ "atFraction": number, "headline": string, "detail"?: string }],',
+    '  "rootCause": { "summary": string, "causalChain": string[], "remediation": string, "keyEvidenceIds": string[] },',
+    '  "plausibleWrongHypotheses": string[],',
+    '  "rubricWeights": { "rootCauseAccuracy": 40, "evidenceQuality": 20, "remediationQuality": 20, "efficiency": 10, "collaboration": 10 },',
+    '  "scoringHints": { "causalTerms": string[], "redHerringTerms": string[], "remediationTerms": string[], "distinctiveTerms": string[] }',
+    "}",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { system: SCENARIO_AUTHOR_PREAMBLE, user };
+}
+
+export function buildSemanticReviewContext(input: SemanticReviewInput): { system: string; user: string } {
+  const { candidate } = input;
+  const user = [
+    `Review this generated scenario candidate for: (title) ${candidate.title}`,
+    `Briefing: ${candidate.briefing}`,
+    `Root cause: ${candidate.rootCause.summary}`,
+    `Causal chain: ${candidate.rootCause.causalChain.join(" -> ")}`,
+    `Remediation: ${candidate.rootCause.remediation}`,
+    `Evidence titles by role: ${candidate.evidence.map((e) => `${e.visibleToRoles.join("/")}: ${e.title}${e.isRedHerring ? " (red herring)" : ""}`).join("; ")}`,
+    `Key evidence ids: ${candidate.rootCause.keyEvidenceIds.join(", ")}`,
+    `Plausible wrong hypotheses: ${candidate.plausibleWrongHypotheses.join("; ")}`,
+    "",
+    "This candidate has ALREADY passed strict structural/schema validation (every id/reference is real, no " +
+      "dangling links). Your job is a semantic/design coherence review only, checking:",
+    "1. Causal consistency - does the causal chain actually explain the briefing's symptoms, with no logical gaps?",
+    "2. Role balance - is there a genuine reason for each investigative role to be involved, not just padding?",
+    "3. Answer leakage - does any evidence title/content or the briefing itself give away the root cause outright " +
+      "rather than requiring investigation?",
+    "4. Red-herring plausibility - are the wrong hypotheses genuinely plausible-sounding, not obviously fake?",
+    "5. Remediation validity - does the proposed remediation actually address the stated root cause?",
+    "6. Scenario coherence - is this internally consistent, or does something contradict something else?",
+    "",
+    'Respond with JSON: { "passed": boolean, "issues": string[] (0-10 items; empty if passed is true; each ' +
+      "issue should name which of the 6 checks above failed and specifically why, e.g. " +
+      '"answer leakage: evidence \'DB Migration Notes\' states the exact root cause in its content") }.',
+  ].join("\n");
+  return { system: SCENARIO_AUTHOR_PREAMBLE, user };
 }

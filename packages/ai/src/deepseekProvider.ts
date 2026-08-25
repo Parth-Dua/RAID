@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateGeneratedScenario } from "@raid/game-engine";
 import type {
   AIInvocationMeta,
   AIProvider,
@@ -6,18 +7,24 @@ import type {
   FinalEvaluationInput,
   HypothesisEvaluationInput,
   InterventionProposalInput,
+  ScenarioGenerationInput,
+  SemanticReviewInput,
   TeamStateClassificationInput,
 } from "./provider.js";
 import {
   DebriefContentSchema,
   FinalEvaluationSchema,
+  GeneratedScenarioSchema,
   HypothesisEvaluationSchema,
   InterventionProposalSchema,
+  SemanticReviewSchema,
   TeamStateClassificationSchema,
   type DebriefContent,
   type FinalEvaluation,
+  type GeneratedScenario,
   type HypothesisEvaluation,
   type InterventionProposal,
+  type SemanticReview,
   type TeamStateClassificationResult,
 } from "./schemas.js";
 import {
@@ -25,6 +32,8 @@ import {
   buildFinalEvaluationContext,
   buildHypothesisContext,
   buildInterventionProposalContext,
+  buildScenarioGenerationContext,
+  buildSemanticReviewContext,
   buildTeamStateClassificationContext,
 } from "./contextBuilders.js";
 import { containsRootCauseLeak } from "./leakGuard.js";
@@ -134,6 +143,48 @@ export class DeepSeekProvider implements AIProvider {
         return { valid: true, sanitized: parsed };
       },
       () => this.fallback.proposeIntervention(input),
+    );
+  }
+
+  /**
+   * V0.5.5's GENERATE -> VALIDATE -> IDENTIFY FAILURES -> REPAIR -> REVALIDATE loop reuses this
+   * class's existing repair-prompt retry mechanism (`run()` below) rather than being separate new
+   * machinery: `validateGeneratedScenario` (the deterministic structural validator) IS the semantic
+   * check passed to `run()`, so a structurally broken candidate (dangling tool reference, duplicate
+   * id, unbalanced roles, ...) triggers the same bounded in-conversation repair retry every other
+   * operation's schema/leak failures already do.
+   */
+  async generateScenario(input: ScenarioGenerationInput): Promise<{ result: GeneratedScenario; meta: AIInvocationMeta }> {
+    const { system, user } = buildScenarioGenerationContext(input);
+    return this.run(
+      "generateScenario",
+      system,
+      user,
+      GeneratedScenarioSchema,
+      (parsed) => {
+        const validation = validateGeneratedScenario(parsed);
+        if (!validation.valid) {
+          return { valid: false, reason: validation.errors.slice(0, 5).join("; ") };
+        }
+        return { valid: true, sanitized: parsed };
+      },
+      () => this.fallback.generateScenario(input),
+    );
+  }
+
+  /** A single bounded review call - the caller (scenarioGenerationService) is responsible for never
+   * invoking this more than once per generation attempt (V0.5.4). No semantic post-validation here
+   * beyond the schema itself; there's nothing further to structurally check about a pass/fail
+   * verdict plus a short issues list. */
+  async semanticReviewScenario(input: SemanticReviewInput): Promise<{ result: SemanticReview; meta: AIInvocationMeta }> {
+    const { system, user } = buildSemanticReviewContext(input);
+    return this.run(
+      "semanticReviewScenario",
+      system,
+      user,
+      SemanticReviewSchema,
+      (parsed) => ({ valid: true, sanitized: parsed }),
+      () => this.fallback.semanticReviewScenario(input),
     );
   }
 

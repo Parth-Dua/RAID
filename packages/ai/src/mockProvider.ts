@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Role } from "@raid/shared";
+import { ROLES } from "@raid/shared";
 import type {
   AIInvocationMeta,
   AIProvider,
@@ -7,9 +8,19 @@ import type {
   FinalEvaluationInput,
   HypothesisEvaluationInput,
   InterventionProposalInput,
+  ScenarioGenerationInput,
+  SemanticReviewInput,
   TeamStateClassificationInput,
 } from "./provider.js";
-import type { DebriefContent, FinalEvaluation, HypothesisEvaluation, InterventionProposal, TeamStateClassificationResult } from "./schemas.js";
+import type {
+  DebriefContent,
+  FinalEvaluation,
+  GeneratedScenario,
+  HypothesisEvaluation,
+  InterventionProposal,
+  SemanticReview,
+  TeamStateClassificationResult,
+} from "./schemas.js";
 
 /**
  * Deterministic, network-free provider. Used whenever AI_PROVIDER=mock
@@ -227,6 +238,31 @@ export class MockAIProvider implements AIProvider {
     return { result, meta: mockMeta("proposeIntervention", start) };
   }
 
+  /**
+   * Deterministic, always-structurally-valid scenario generator (V0.5.5's "mock mode"). Not an
+   * attempt at real language generation — it's a fixed, parameterized template (4 tools/evidence
+   * per investigative role, 2 for IC, a 4-step causal chain, red herrings, a materializable
+   * fractional timeline) with a handful of keywords lifted from the free-text `description` slotted
+   * in, so different requests produce visibly different (but always valid) candidates. This is what
+   * makes the full generate -> validate -> review -> save pipeline exercisable, deterministically,
+   * in every automated test without a live call.
+   */
+  async generateScenario(input: ScenarioGenerationInput): Promise<{ result: GeneratedScenario; meta: AIInvocationMeta }> {
+    const start = Date.now();
+    const result = buildMockGeneratedScenario(input.description);
+    return { result, meta: mockMeta("generateScenario", start) };
+  }
+
+  /** The mock generator always produces a coherent, non-leaking candidate by construction (it never
+   * has "real" language-model creativity to go wrong), so this always passes - it exists so the
+   * review step itself is exercised in tests without needing a live call, not to simulate a model
+   * finding real design problems. */
+  async semanticReviewScenario(_input: SemanticReviewInput): Promise<{ result: SemanticReview; meta: AIInvocationMeta }> {
+    const start = Date.now();
+    const result: SemanticReview = { passed: true, issues: [] };
+    return { result, meta: mockMeta("semanticReviewScenario", start) };
+  }
+
   async generateDebrief(input: DebriefInput): Promise<{ result: DebriefContent; meta: AIInvocationMeta }> {
     const start = Date.now();
     const result: DebriefContent = {
@@ -256,5 +292,135 @@ function mockMeta(operation: AIInvocationMeta["operation"], start: number): AIIn
     provider: "mock",
     success: true,
     usedFallback: false,
+  };
+}
+
+const GENERATION_STOPWORDS = new Set([
+  "a", "an", "the", "of", "in", "on", "to", "for", "with", "by", "is", "was", "are", "that", "this",
+  "causing", "cause", "caused", "broken", "incident", "create", "creates", "intermediate", "advanced",
+  "beginner", "difficulty", "and", "or", "due", "from",
+]);
+
+function slugify(text: string, maxLen = 40): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLen)
+    .replace(/-+$/g, "");
+  return slug.length >= 3 ? slug : "generated-incident";
+}
+
+function extractKeywords(description: string, max = 6): string[] {
+  const words = description.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const filtered = words.filter((w) => w.length > 3 && !GENERATION_STOPWORDS.has(w));
+  const unique = [...new Set(filtered)];
+  const picked = unique.slice(0, max);
+  // Guarantee at least 2 keywords even for a very short/generic description, so downstream text
+  // generation (which assumes keywords[0]/keywords[1] exist) never has to special-case an empty list.
+  while (picked.length < 2) picked.push(["service", "dependency", "component"][picked.length] ?? "system");
+  return picked;
+}
+
+const GENERATION_ROLE_LABELS: Record<Role, string> = {
+  backend_engineer: "Backend Engineer",
+  database_engineer: "Database Engineer",
+  sre: "SRE",
+  incident_commander: "Incident Commander",
+};
+
+/** Builds one investigative role's tools/evidence for the mock generator template. Returns the key
+ * evidence id for that role so the caller can assemble `rootCause.keyEvidenceIds` spanning all 3
+ * investigative roles (satisfying the same "no single role can solve it alone" bar every
+ * hand-authored scenario meets). */
+function buildMockRoleContent(
+  role: Role,
+  keyword: string,
+  redHerringKeyword: string,
+): { tools: GeneratedScenario["tools"]; evidence: GeneratedScenario["evidence"]; keyEvidenceId: string } {
+  const label = GENERATION_ROLE_LABELS[role];
+  const prefix = role.slice(0, 3);
+  const isIC = role === "incident_commander";
+  const toolCount = isIC ? 2 : 4;
+
+  const tools: GeneratedScenario["tools"] = Array.from({ length: toolCount }, (_, i) => ({
+    id: `${prefix}_tool_${i}`,
+    role,
+    name: `${label} Tool ${i + 1}`,
+    description: `Inspect ${label.toLowerCase()}-side signals related to ${keyword}.`,
+    resultSummary: `${label} diagnostic output.`,
+    baselineOutput: "Nothing unusual yet.",
+  }));
+
+  const evidence: GeneratedScenario["evidence"] = tools.map((tool, i) => {
+    const isRedHerring = !isIC && i === toolCount - 1;
+    return {
+      id: `${prefix}_ev_${i}`,
+      visibleToRoles: [role],
+      title: isRedHerring ? `${label}: ${redHerringKeyword} check (ruled out)` : `${label}: ${keyword} signal ${i + 1}`,
+      category: (["log", "metric", "trace", "deployment"] as const)[i % 4]!,
+      content: isRedHerring
+        ? `${label} confirms ${redHerringKeyword}-related systems are nominal - this is not the cause.`
+        : `${label} observes an anomaly consistent with ${keyword} affecting this incident.`,
+      unlock: i === 0 ? { toolId: tool.id } : { toolId: tool.id, atFraction: Math.min(0.9, 0.1 * i) },
+      isRedHerring,
+      isKeyEvidence: !isIC && i === 0,
+    };
+  });
+
+  return { tools, evidence, keyEvidenceId: evidence[0]!.id };
+}
+
+function buildMockGeneratedScenario(description: string): GeneratedScenario {
+  const keywords = extractKeywords(description);
+  const [primary, secondary] = keywords as [string, string];
+  const title = `${primary[0]!.toUpperCase()}${primary.slice(1)} ${secondary} Incident`.slice(0, 90);
+  const id = slugify(`${primary}-${secondary}-incident`);
+
+  const investigativeRoles = ROLES.filter((r) => r !== "incident_commander");
+  const roleContents = investigativeRoles.map((role, i) =>
+    buildMockRoleContent(role, keywords[i % keywords.length]!, keywords[(i + 1) % keywords.length]!),
+  );
+  const icContent = buildMockRoleContent("incident_commander", primary, secondary);
+
+  const allTools = [...roleContents.flatMap((r) => r.tools), ...icContent.tools];
+  const allEvidence = [...roleContents.flatMap((r) => r.evidence), ...icContent.evidence];
+  const keyEvidenceIds = roleContents.map((r) => r.keyEvidenceId);
+
+  return {
+    id,
+    title,
+    severity: "SEV-2",
+    briefing: `Based on the request "${description.slice(0, 300)}", ${primary} appears to be degrading, with symptoms related to ${secondary} spreading across the system. Find the root cause and propose a remediation before the incident window closes.`,
+    tools: allTools,
+    evidence: allEvidence,
+    timeline: [
+      { atFraction: 0, headline: `First signs of ${primary} degradation appear` },
+      { atFraction: 0.25, headline: `${secondary}-related symptoms become visible to users` },
+      { atFraction: 0.55, headline: "Impact widens across the affected system" },
+      { atFraction: 0.8, headline: "Support tickets escalate" },
+    ],
+    rootCause: {
+      summary: `A change related to ${primary} introduced a defect that, combined with ${secondary}, produced the observed incident. Each investigative role's evidence captures one part of the mechanism; no single role's evidence alone fully explains it.`,
+      causalChain: [
+        `A change related to ${primary} was introduced`,
+        `This altered how the system handles ${secondary} under normal load`,
+        `The altered behavior compounds over time, degrading the affected component`,
+        `The degradation surfaces to users as the incident's reported symptoms`,
+      ],
+      remediation: `Revert or fix the ${primary} change, address the ${secondary} handling defect directly, and add monitoring that would have caught this earlier.`,
+      keyEvidenceIds,
+    },
+    plausibleWrongHypotheses: [
+      `A sudden traffic spike is responsible (ruled out by the SRE's request-rate evidence).`,
+      `An unrelated third-party dependency is failing (ruled out by the backend engineer's dependency-health evidence).`,
+    ],
+    rubricWeights: { rootCauseAccuracy: 40, evidenceQuality: 20, remediationQuality: 20, efficiency: 10, collaboration: 10 },
+    scoringHints: {
+      causalTerms: [primary, secondary, `${primary} ${secondary}`],
+      redHerringTerms: ["traffic spike", "third-party dependency", "network"],
+      remediationTerms: ["revert", "fix", "monitoring"],
+      distinctiveTerms: [`${primary} defect`, `${secondary} handling`],
+    },
   };
 }

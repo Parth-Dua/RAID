@@ -28,6 +28,27 @@ export const rooms = pgTable("rooms", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * V0.5 AI-generated scenario content — global (not room/game-scoped) so a saved custom scenario is
+ * immediately playable by any room, exactly like a built-in one. `definition` stores the full
+ * difficulty-neutral, duration-neutral `GeneratedScenarioDefinition` JSON (evidence/timeline still
+ * expressed as fractions - see `materializeGeneratedScenario`); `scenarioId` is the slug used
+ * everywhere a built-in scenario's id is used (`game:start`'s payload, `ScenarioDefinition.id`).
+ * No authorship/ownership tracking - RAID has no accounts (see docs/DECISIONS.md), so a saved
+ * scenario is simply available to everyone, same as the 3 built-in ones.
+ */
+export const generatedScenarios = pgTable("generated_scenarios", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  scenarioId: varchar("scenario_id", { length: 60 }).notNull().unique(),
+  title: varchar("title", { length: 100 }).notNull(),
+  severity: varchar("severity", { length: 10 }).notNull(),
+  briefing: text("briefing").notNull(),
+  tagline: varchar("tagline", { length: 150 }).notNull(),
+  definition: jsonb("definition").notNull(),
+  requestedDescription: text("requested_description").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const players = pgTable("players", {
   id: uuid("id").primaryKey().defaultRandom(),
   roomId: uuid("room_id")

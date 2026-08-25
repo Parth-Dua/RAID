@@ -9,9 +9,16 @@ uses to build payloads, and both compile against the same TypeScript types.
 
 - One Socket.IO connection per browser tab, opened after a REST `POST /api/rooms` or
   `POST /api/rooms/:code/join` call has set the session cookie.
-- `GET /api/scenarios` (V0.3, unauthenticated, not room-scoped) returns the static scenario catalog
-  (`ScenarioCatalogEntry[]` — id, title, severity, briefing, tagline) that populates the lobby's
-  scenario picker; it's read-only content, not covered by the socket auth flow above.
+- `GET /api/scenarios` (V0.3, extended V0.5) returns the scenario catalog (`ScenarioCatalogEntry[]` —
+  id, title, severity, briefing, tagline) that populates the lobby's scenario picker: the 3 built-in
+  scenarios plus every saved AI-generated one. `POST /api/scenarios/generate` (V0.5, body
+  `{description, difficulty?}`) runs one generation + structural-validation + semantic-review attempt
+  and returns `{candidate, validation, semanticReview, eligibleToSave}` — it never persists anything.
+  `POST /api/scenarios/save` (V0.5, body `{candidate, requestedDescription?}`) re-validates
+  deterministically (no AI call) and persists a candidate already returned by `/generate`, assigning
+  it a disambiguated `scenarioId` usable anywhere a built-in scenario id is (including `game:start`'s
+  payload below). All three are unauthenticated and not room-scoped — read-only or globally-available
+  content, not covered by the socket auth flow.
 - Handshake auth: `io(url, { withCredentials: true, auth: { roomCode } })`. The server's
   `socketAuthMiddleware` (`apps/server/src/sockets/auth.ts`) reads the session cookie from the
   handshake headers, resolves it to a player, and rejects the connection outright (`connect_error`)
@@ -30,7 +37,7 @@ via the acknowledgement callback and never reaches application code.
 |---|---|---|---|
 | `player:ready` | `{ ready: boolean }` | must be a room member; room must be `LOBBY` | `{ok:true}` |
 | `player:leave` (V0.2) | `{}` | room member; room must be `LOBBY` (once a game has started, a player can only disconnect, not remove themselves — their role/evidence are bound to game rows) | `{ok:true}` |
-| `game:start` | `{ durationPreset?: "standard"\|"demo"\|"instant", scenarioId?: string, difficulty?: "NORMAL"\|"HARD" }` (V0.3: `scenarioId`/`difficulty` added; both optional, defaulting to `checkout-degradation`/`NORMAL`) | caller must be the room's host (`rooms.hostPlayerId`); room `LOBBY`; `scenarioId` (if given) must be a real registered scenario id or the call is rejected with `INVALID_PAYLOAD`; 3-4 players, all ready | `{ok:true, data:{gameId}}` |
+| `game:start` | `{ durationPreset?: "standard"\|"demo"\|"instant", scenarioId?: string, difficulty?: "NORMAL"\|"HARD" }` (V0.3: `scenarioId`/`difficulty` added; both optional, defaulting to `checkout-degradation`/`NORMAL`) | caller must be the room's host (`rooms.hostPlayerId`); room `LOBBY`; `scenarioId` (if given) must be a real built-in scenario id OR a saved generated one (V0.5 — checked against both `listScenarioIds()` and the `generated_scenarios` table) or the call is rejected with `INVALID_PAYLOAD`; 3-4 players, all ready | `{ok:true, data:{gameId}}` |
 | `game:rematch` (V0.3) | `{}` | caller must be the room's host; room must be `COMPLETED` | `{ok:true}` — broadcasts a fresh `room:snapshot` with `phase:"LOBBY"`, `gameId:null`, and every player's `ready` reset to `false` |
 | `chat:send` | `{ text: string(1-500), clientMsgId: uuid }` | room member; game `ACTIVE` or `FINALIZING` | `{ok:true}` |
 | `tool:execute` | `{ toolId: string }` | tool's `role` must equal the caller's assigned role; game `ACTIVE` | `{ok:true, data:{output, unlockedEvidenceIds}}` |

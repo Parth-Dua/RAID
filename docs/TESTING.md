@@ -8,23 +8,25 @@ requires network access. `.env.test` (gitignored, `apps/server/.env.test`) point
 
 ```bash
 # packages/game-engine - state machine, scoring, scenario unlock logic, scenario quality checklist,
-# difficulty transform (V0.3)
+# difficulty transform (V0.3), generated-scenario structural validator (V0.5)
 cd packages/game-engine && pnpm exec vitest run
-# 5 files, 50/50 tests passed
+# 6 files, 62/62 tests passed
 
 # packages/ai - mock provider behavior, leak guard, DeepSeek malformed-output handling,
-# collective reasoning state + intervention validation (V0.4)
+# collective reasoning state + intervention validation (V0.4), scenario generation + semantic
+# review (V0.5)
 cd packages/ai && pnpm exec vitest run
-# 5 files, 69/69 tests passed
+# 6 files, 83/83 tests passed
 
 # apps/server - REST, concurrency races, security/privacy, full game flow + reconnect + auto-finalize,
-# scenario selection + rematch (V0.3), adaptive Game Master orchestration (V0.4)
+# scenario selection + rematch (V0.3), adaptive Game Master orchestration (V0.4), scenario
+# generation/save/play (V0.5)
 cd apps/server && NODE_ENV=test pnpm exec vitest run
-# 8 files, 56/56 tests passed (one file takes ~65s: it genuinely waits out a real 60s
+# 9 files, 67/67 tests passed (one file takes ~65s: it genuinely waits out a real 60s
 # "instant"-preset timer to prove auto-finalization fires without a submission)
 ```
 
-175 tests total across the monorepo, all green as of the last full run (V0.4) — see
+212 tests total across the monorepo, all green as of the last full run (V0.5) — see
 `docs/REVIEW_NOTES.md` for the handful of real bugs these caught and fixed along the way (several of
 the original concurrency/security tests failed on their first run for genuine reasons, not test bugs),
 and each phase's entry in `docs/MILESTONES.md` for what was added and why per phase.
@@ -84,6 +86,16 @@ attempt succeeds).
   `vi.spyOn(aiProvider, ...)` so this file tests the budget/cooldown/validation *orchestration* in
   `gameMasterService.ts` directly and deterministically — the classification heuristic itself is
   exhaustively covered at the `packages/ai` unit level instead (`mockProvider.test.ts`).
+- `v0.5.test.ts` (V0.5) — `POST /api/scenarios/generate` returns a structurally-valid,
+  review-passed candidate and never persists anything as a side effect; rejects an empty/overlong
+  description; `POST /api/scenarios/save` persists a valid candidate into the scenario catalog,
+  disambiguates an id collision rather than overwriting, and re-validates (rejecting) a tampered
+  candidate that references missing evidence (adversarial case) or a broken unlock graph
+  (adversarial case) or doesn't match the schema at all; and, end-to-end, a saved generated scenario
+  can actually be started, played through real tool execution, and completed with a real score - the
+  same real-socket flow every built-in scenario is tested through, proving a generated scenario is
+  genuinely indistinguishable from a built-in one once saved. Also confirms starting a game with a
+  scenario id that was never generated or saved is still rejected with `INVALID_PAYLOAD`.
 
 **System-level (`apps/server/src/scripts/botSimulation.ts`)**: not a vitest suite — a standalone
 script that drives 4 real `socket.io-client` connections through the *actual* REST + Socket.IO API
@@ -128,6 +140,13 @@ afterward); and a Playwright run confirming the negative case — a team with no
 yet is classified `INSUFFICIENT_EVIDENCE` and correctly gets no intervention, rather than a premature
 or spammy one. See `docs/MILESTONES.md`'s V0.4 entry for the exact log lines and reasoning.
 
+V0.5's scenario authoring UI was verified end-to-end in a real browser: expand the "Generate a custom
+scenario" panel, submit a free-text description, confirm the candidate passes both structural
+validation and semantic review and the preview card renders real tool/evidence counts, click Save,
+confirm it appears in the scenario picker and gets auto-selected, then actually start and load a game
+with that generated scenario (confirming the in-game view renders normally, not just that the save
+succeeded).
+
 ## Failure-mode tests specifically (spec section 34 "Failure tests")
 
 | Required case | Where it's covered |
@@ -140,7 +159,8 @@ or spammy one. See `docs/MILESTONES.md`'s V0.4 entry for the exact log lines and
 | Expired/invalid session | `security.test.ts` socket-authentication tests |
 | Invalid phase transition | `concurrency.test.ts` host-double-start; `packages/game-engine` state-machine unit tests for the illegal-transition cases directly |
 | AI intervention attempts root-cause leak (V0.4) | `interventionValidator.test.ts` (unit) and `v0.4.test.ts` "discards ... an intervention proposal that leaks the root cause" (integration, via `runGameMasterCheck`) |
-| Generated scenario references missing evidence / broken unlock graph | not yet applicable — scenario generation ships in V0.5; will be covered there |
+| Generated scenario references missing evidence (V0.5) | `scenarioGenerationValidator.test.ts` (unit) and `v0.5.test.ts` "rejects ... a candidate that references missing evidence" (integration, via `POST /api/scenarios/save`) |
+| Generated scenario has a broken unlock graph (V0.5) | `scenarioGenerationValidator.test.ts` (unit, "rejects an evidence unlock referencing an unknown tool id") and `v0.5.test.ts` "rejects ... a candidate with a broken unlock graph" (integration) |
 | Rematch while old events are in flight | `v0.3.test.ts` "a stale final:submit against an already-completed, already-rematched game is rejected" |
 
 ## Known gaps

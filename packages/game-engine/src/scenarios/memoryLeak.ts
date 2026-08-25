@@ -1,4 +1,5 @@
 import type { EvidenceDefinition, ScenarioDefinition, TimelineStep, ToolDefinition } from "@raid/shared";
+import { materializeFractionalEvidence, materializeFractionalTimeline } from "../fractionalScenario.js";
 
 /**
  * "Recommendation Service Crash Loop" — scenario 3. A third distinct failure *mechanism* again
@@ -416,19 +417,8 @@ const TIMELINE: FractionalTimelineStep[] = [
 ];
 
 export function buildMemoryLeakScenario(durationSeconds: number): Omit<ScenarioDefinition, "difficulty"> {
-  const evidence: EvidenceDefinition[] = EVIDENCE.map((e) => ({
-    ...e,
-    unlock: {
-      toolId: e.unlock.toolId,
-      atSeconds: e.unlock.atFraction !== undefined ? Math.round(e.unlock.atFraction * durationSeconds) : undefined,
-    },
-  }));
-
-  const timeline: TimelineStep[] = TIMELINE.map((t) => ({
-    atSeconds: Math.round(t.atFraction * durationSeconds),
-    headline: t.headline,
-    detail: t.detail,
-  }));
+  const evidence: EvidenceDefinition[] = materializeFractionalEvidence(EVIDENCE, durationSeconds);
+  const timeline: TimelineStep[] = materializeFractionalTimeline(TIMELINE, durationSeconds);
 
   return {
     id: "memory-leak",

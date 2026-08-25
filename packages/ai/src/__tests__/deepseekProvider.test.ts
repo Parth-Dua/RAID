@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildScenario } from "@raid/game-engine";
 import { DeepSeekProvider } from "../deepseekProvider.js";
+import { MockAIProvider } from "../mockProvider.js";
 import type { CollectiveReasoningState } from "../collectiveState.js";
 
 const scenario = buildScenario("checkout-degradation", 1200);
@@ -288,5 +289,75 @@ describe("DeepSeekProvider classifyTeamState / proposeIntervention (V0.4)", () =
     const { result, meta } = await provider.proposeIntervention({ scenario, state, classification: "INSUFFICIENT_EVIDENCE" });
     expect(meta.usedFallback).toBe(false);
     expect(result.shouldIntervene).toBe(false);
+  });
+});
+
+describe("DeepSeekProvider generateScenario / semanticReviewScenario (V0.5)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("succeeds on a well-formed, structurally-valid candidate", async () => {
+    const validCandidate = (await new MockAIProvider().generateScenario({ description: "A broken readiness probe" })).result;
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(JSON.stringify(validCandidate)));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { result, meta } = await provider.generateScenario({ description: "A broken readiness probe" });
+    expect(meta.usedFallback).toBe(false);
+    expect(result.id).toBe(validCandidate.id);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a candidate that fails the deterministic structural validator (dangling tool reference), then falls back", async () => {
+    const validCandidate = (await new MockAIProvider().generateScenario({ description: "A slow database migration" })).result;
+    const broken = { ...validCandidate, evidence: [...validCandidate.evidence] };
+    broken.evidence[0] = { ...broken.evidence[0]!, unlock: { toolId: "not_a_real_tool_id" } };
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(JSON.stringify(broken)));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { meta } = await provider.generateScenario({ description: "A slow database migration" });
+    expect(meta.usedFallback).toBe(true);
+  });
+
+  it("recovers via repair prompt when the first attempt is structurally broken but the second is valid", async () => {
+    const validCandidate = (await new MockAIProvider().generateScenario({ description: "A memory leak in a sidecar proxy" })).result;
+    const broken = { ...validCandidate, rootCause: { ...validCandidate.rootCause, keyEvidenceIds: ["totally_made_up_id"] } };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(broken)))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(validCandidate)));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { result, meta } = await provider.generateScenario({ description: "A memory leak in a sidecar proxy" });
+    expect(meta.usedFallback).toBe(false);
+    expect(result.id).toBe(validCandidate.id);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to the mock generator on a network failure without throwing", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("network down"));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    await expect(provider.generateScenario({ description: "A broken CDN cache purge" })).resolves.toMatchObject({
+      meta: { usedFallback: true, success: false },
+    });
+  });
+
+  it("semanticReviewScenario succeeds on a well-formed review response", async () => {
+    const validCandidate = (await new MockAIProvider().generateScenario({ description: "A noisy neighbor CPU throttling issue" })).result;
+    const good = JSON.stringify({ passed: true, issues: [] });
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(good));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { result, meta } = await provider.semanticReviewScenario({ candidate: validCandidate });
+    expect(meta.usedFallback).toBe(false);
+    expect(result.passed).toBe(true);
+  });
+
+  it("semanticReviewScenario falls back gracefully when the model returns a malformed review", async () => {
+    const validCandidate = (await new MockAIProvider().generateScenario({ description: "A TLS certificate expiry" })).result;
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse("not json"));
+    const provider = makeProvider(fetchImpl as unknown as typeof fetch);
+
+    const { meta } = await provider.semanticReviewScenario({ candidate: validCandidate });
+    expect(meta.usedFallback).toBe(true);
   });
 });

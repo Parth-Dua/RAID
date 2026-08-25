@@ -76,9 +76,9 @@ V0.2 role-balance review; the fix (two new IC-exclusive tools, evidence gated th
 other role's) is enforced going forward by an automated check (`evaluateScenarioQuality`'s "Incident
 Commander has at least one active tool") so a future scenario can't reintroduce a passive IC silently.
 
-## Scenarios (V0.3)
+## Scenarios (V0.3, extended V0.5)
 
-RAID ships **3 scenarios**, chosen by the host in the lobby (`GET /api/scenarios` serves the catalog;
+RAID ships **3 built-in scenarios**, chosen by the host in the lobby (`GET /api/scenarios` serves the catalog;
 `SCENARIO_REGISTRY` in `packages/game-engine/src/scenarioEngine.ts` is the single place scenario ids
 are switched on — no `if (scenario.id === ...)` branching exists anywhere else in product logic, per
 V0.3.3). Each is a genuinely different failure *mechanism*, not a reskin of the others, so the
@@ -186,6 +186,26 @@ Durations and unlock thresholds are authored once as fractions of `durationSecon
 scenario-build time (e.g. `buildCheckoutDegradationScenario(durationSeconds)`) — a 60s "instant" preset
 (used only by the bot script and integration tests) and the real 5min/20min presets share one causal
 script instead of maintaining parallel content.
+
+## Custom (AI-generated) scenarios (V0.5)
+
+Beyond the 3 built-in scenarios, a host can generate a custom one from the lobby: a free-text request
+like *"Create an intermediate Kubernetes incident caused by a broken readiness configuration"* produces
+a full scenario (title, roles, tools, evidence, red herrings, timeline, root cause, remediation)
+through the same authoring mechanics described above — fractional time, 4-role structure, key evidence
+spanning multiple roles. A generated scenario must pass the identical structural checks a hand-authored
+one would (`validateGeneratedScenario`, then the same 14-check `evaluateScenarioQuality` bar) before it
+can be saved, and once saved it plays through the exact same engine code as a built-in scenario — no
+downstream code (scoring, the Game Master, difficulty, evidence unlocking) treats a generated scenario
+any differently. See `docs/AI_DESIGN.md` "AI-Assisted Scenario Generation (V0.5)" for the full
+generate → validate → review → save pipeline and `docs/DECISIONS.md` ADR-023/ADR-024 for why it reuses
+existing retry/materialization machinery rather than building new mechanisms.
+
+This does **not** replace scenario design craft with pure automation: the mock generator (used by every
+automated test) is a deterministic template, and even a live model's output is only as good as the
+structural bar it's held to — the checklist enforces *executability* and *balance*, not narrative
+quality, which is why the semantic review step (checking causal consistency, red-herring plausibility,
+and answer leakage specifically) exists as a second, independent gate.
 
 ## Difficulty (V0.3.2)
 

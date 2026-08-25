@@ -38,7 +38,7 @@ export async function resetDatabase(): Promise<void> {
     TRUNCATE TABLE
       game_results, final_submissions, hypothesis_evidence, hypothesis_reactions,
       hypotheses, known_facts, chat_messages, tool_actions, game_evidence, game_interventions,
-      game_players, games, game_events, players, rooms
+      game_players, games, game_events, players, rooms, generated_scenarios
     RESTART IDENTITY CASCADE
   `);
 }

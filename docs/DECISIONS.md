@@ -537,3 +537,69 @@ structurally dangerous in the first place.
 authored-in-advance optional evidence item early") would need a deliberately narrow new mutation type
 with its own validation — not a general "AI can mutate state" escape hatch — and should only be
 considered once chat-message-only interventions have been played and found insufficient.
+
+---
+
+## ADR-023: Generated scenarios reuse the repair-retry loop instead of new repair machinery
+
+**Context**: V0.5.5 requires a bounded GENERATE → VALIDATE → IDENTIFY FAILURES → REPAIR → REVALIDATE
+loop for AI-generated scenarios. `DeepSeekProvider` already has exactly this shape internally
+(`run()`'s schema-failure/semantic-failure retry, capped by `AI_MAX_RETRIES`, used by every other
+operation) — the design question was whether scenario generation needed its own, separate repair
+mechanism (e.g. a loop living in `scenarioGenerationService.ts` that calls `generateScenario`
+multiple times, diffing errors between attempts and building a repair prompt itself).
+
+**Chosen approach**: no new mechanism. `DeepSeekProvider.generateScenario` passes
+`validateGeneratedScenario` (the deterministic structural validator, `packages/game-engine`) as the
+`run()` pipeline's semantic-validation callback — the identical slot `evaluateHypothesis` fills with
+the leak guard and `evaluateFinalDiagnosis` fills with the evidence-id-hallucination check. A
+structurally invalid candidate fails that callback, which triggers the same in-conversation
+repair-prompt retry (with the validator's error list appended, capped at 5 for prompt-length safety)
+every other operation's schema/semantic failures already trigger, bounded by the same
+`AI_MAX_RETRIES` config.
+
+**Why**: one retry mechanism to reason about and test, not two. `deepseekProvider.test.ts` already
+exhaustively covers the retry/repair/fallback behavior of this pipeline for every other operation;
+scenario generation inherits that coverage's *mechanism* for free and only needed new tests for its
+own semantic-validation callback (does an invalid candidate actually fail it, does a valid one pass).
+A bespoke second retry loop would have needed its own timeout/backoff/max-attempts reasoning,
+duplicating decisions already made once in `run()`.
+
+**What would make us reconsider**: if scenario generation ever needed a *different* retry policy
+than every other operation (e.g. more attempts, because a full scenario is a much larger and more
+failure-prone generation than a one-sentence hypothesis rationale), that would argue for
+parameterizing `run()`'s retry count per-operation rather than forking a second mechanism — still
+not a reason to build separate repair machinery.
+
+---
+
+## ADR-024: A generated scenario is authored and stored in the same fractional shape as built-in ones
+
+**Context**: V0.5's generated scenarios need to support the same duration presets (demo/standard/
+instant) and the same NORMAL/HARD difficulty as the 3 built-in scenarios, without asking the AI to
+generate a separate version per duration or difficulty. The 3 hand-authored scenario files already
+solved an equivalent problem for themselves (author once as fractions of the eventual duration, scale
+at build time — see ADR-020's difficulty-as-transform decision for the related "author once" pattern)
+but had that scaling logic duplicated 3 times, once per scenario file.
+
+**Chosen approach**: `GeneratedScenarioDefinition` (packages/shared) uses the identical fractional
+shape (`atFraction` instead of `atSeconds`) the 3 built-in scenarios' internal `FractionalEvidence`/
+`FractionalTimelineStep` types already used. The scaling logic itself was extracted, as part of this
+work, into `materializeFractionalEvidence`/`materializeFractionalTimeline`
+(`packages/game-engine/src/fractionalScenario.ts`) — a small, mechanical DRY refactor of the 3
+existing scenario files (verified behavior-identical: all 62 game-engine tests passed unchanged
+before and after) — so a generated scenario reuses the exact same functions rather than needing a
+4th implementation of the same fraction-to-seconds math. `buildGeneratedScenario` then composes that
+materializer with the same `applyDifficulty()` every built-in scenario uses.
+
+**Why**: this is what makes "a generated scenario plays through the exact same engine, no special
+casing" true rather than aspirational. The only place server code distinguishes "built-in" from
+"AI-generated" is `gameLoader.resolveScenario`'s registry-or-database lookup; everything downstream
+of that one function — scoring, the Game Master, difficulty, evidence unlocking — operates on a plain
+`ScenarioDefinition` with no marker saying where it came from.
+
+**What would make us reconsider**: a scenario-generation feature that genuinely needed
+duration-specific content (not just differently-scaled timing of the same content) would break this
+model and require the AI to generate per-duration variants — not currently needed, since every
+built-in scenario's design already treats duration as a pacing dial on one fixed set of content,
+and generated scenarios were designed to match that same assumption.

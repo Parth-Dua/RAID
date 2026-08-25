@@ -18,6 +18,7 @@ require live-integration evidence mocks can't provide.
 | V0.2 | 0 (mock only) | 0 | 0 | $0.00 | $0.00 |
 | V0.3 | 0 (mock only) | 0 | 0 | $0.00 | $0.00 |
 | V0.4 | 5 (V0.4.6 smoke test — `deepseekSmokeTest.ts` calls 1-3 unchanged + new calls 4-5 for `classifyTeamState`/`proposeIntervention`; all 5 failed at network layer, sandbox egress blocked `api.deepseek.com`, identical to V0.1) | 0 (never reached the model) | 0 | $0.00 | $0.00 |
+| V0.5 | 2 (V0.5.6 smoke test — `deepseekSmokeTest.ts` new calls 6-7 for `generateScenario`/`semanticReviewScenario`; both failed at network layer, identical restriction, re-confirmed with a real `DEEPSEEK_API_KEY` supplied) | 0 (never reached the model) | 0 | $0.00 | $0.00 |
 
 Running total: **$0.00 of $8.00**.
 
@@ -354,4 +355,134 @@ real playtesting data or configurable per scenario/difficulty.
 
 ---
 
-(V0.5 onward recorded below as each phase completes.)
+## V0.5 — AI-assisted scenario generation
+
+**Goal**: let a host generate a new, playable incident scenario from a free-text request (e.g. "Create
+an intermediate Kubernetes incident caused by a broken readiness configuration"), held to a strict
+generation schema and a deterministic structural validator, with a single bounded AI semantic-review
+pass, a bounded repair loop for structurally broken output, budget-conscious live evaluation, and a
+lightweight (not no-code-editor) authoring UI — without ever lowering the bar a generated scenario
+must clear relative to a hand-authored one.
+
+**What changed**:
+- **Strict Generation Schema** (`GeneratedScenarioSchema`, `packages/ai/src/schemas.ts`): mirrors
+  `GeneratedScenarioDefinition` field-for-field with real bounds (string/array lengths, enum values) —
+  a response that doesn't parse against this is never treated as valid content, full stop.
+- **Deterministic Validator** (`validateGeneratedScenario`,
+  `packages/game-engine/src/scenarioGenerationValidator.ts`): the cross-reference/executability layer
+  a shape schema can't express — real roles, no duplicate tool/evidence ids, every evidence unlock
+  references a real tool, every `keyEvidenceIds` entry references real evidence, a monotonic timeline,
+  every investigative role has at least one tool, rubric weights sum to 100. Provider-agnostic: the
+  same function protects a live DeepSeek generation, `MockAIProvider`'s output, and a human-submitted
+  `/save` payload alike.
+- **Repair Loop**: no new machinery — `DeepSeekProvider.generateScenario` passes
+  `validateGeneratedScenario` as the exact semantic-validation callback every other operation's
+  existing `run()` retry pipeline already takes, so a structurally broken candidate triggers the same
+  bounded, in-conversation repair-prompt retry (capped by `AI_MAX_RETRIES`) a leaked hypothesis
+  rationale or hallucinated evidence id already does elsewhere (ADR-023).
+- **Semantic Review**: `semanticReviewScenario`, exactly one AI call per generation attempt, only
+  ever reached once a candidate already passed the schema and the deterministic validator — reviews
+  causal consistency, role balance, answer leakage, red-herring plausibility, remediation validity,
+  and scenario coherence, returning `{passed, issues[]}`.
+- **Materialization**: `GeneratedScenarioDefinition` uses the same fractional (`atFraction`) time
+  representation the 3 built-in scenarios' internal types already used. Extracted
+  `materializeFractionalEvidence`/`materializeFractionalTimeline`
+  (`packages/game-engine/src/fractionalScenario.ts`) out of 3x-duplicated inline logic in the
+  hand-authored scenario files (verified behavior-identical — all pre-existing game-engine tests
+  passed unchanged before and after) so a generated scenario reuses the identical scaling functions
+  rather than a 4th implementation of the same math (ADR-024). `buildGeneratedScenario` composes that
+  materializer with the same `applyDifficulty()` every built-in scenario uses.
+- **Persistence + playability**: a new `generated_scenarios` table (global content, not room/game-
+  scoped) stores the saved, difficulty-neutral definition. `gameLoader.resolveScenario` checks the
+  built-in registry first, then falls back to this table — the *only* place server code distinguishes
+  a generated scenario from a built-in one; everything downstream (scoring, the Game Master,
+  difficulty, evidence unlocking) works from a plain `ScenarioDefinition` with zero awareness of
+  where it came from. `GET /api/scenarios` merges both sources into one catalog; `roomService.startGame`
+  accepts either kind of scenario id.
+- **REST API**: `POST /api/scenarios/generate` (generate + validate + one review call, saves
+  nothing) and `POST /api/scenarios/save` (re-validates deterministically — no AI call — and
+  persists, disambiguating a proposed id against every existing scenario id rather than overwriting).
+- **Mock Mode**: `MockAIProvider.generateScenario` is a deterministic, keyword-parameterized template
+  (not real language generation) that always produces a structurally-valid, quality-checklist-passing
+  candidate regardless of the input description — every automated test runs against this.
+- **Scenario Authoring UI** (`apps/web/src/components/ScenarioGeneratorPanel.tsx`): a description box,
+  a Generate button, a compact preview (title/briefing/severity/tool+evidence counts) with the
+  validation/review results inline, and a Save button — deliberately not a field-by-field editor; a
+  saved scenario is immediately added to the lobby's existing scenario picker and auto-selected.
+- Bumped the JSON body-size limit (64kb → 512kb) for `POST /api/scenarios/save`'s full
+  scenario-definition payload — every other route's payloads stay tiny.
+
+**Acceptance conditions**:
+- PASS host can request a generated scenario in natural language and get a full, playable definition — `POST /api/scenarios/generate`, verified in `v0.5.test.ts` and live in a real browser (description in, valid candidate out)
+- PASS generated content is never accepted raw/unvalidated — `GeneratedScenarioSchema` (shape) + `validateGeneratedScenario` (cross-reference/executability), both mandatory before anything is eligible to save
+- PASS deterministic validator catches structurally broken output (invalid roles/ids, dangling references, duplicates, non-executable roles, bad rubric weights) — 12 dedicated unit tests (`scenarioGenerationValidator.test.ts`) plus 2 adversarial integration tests (missing-evidence reference, broken unlock graph) via `POST /api/scenarios/save`
+- PASS semantic review checks the 6 named dimensions (causal consistency, role balance, answer leakage, red-herring plausibility, remediation validity, scenario coherence) and is never run more than once per attempt — enforced by `scenarioGenerationService.ts`'s call structure (review only reachable after validation passes, no loop around it)
+- PASS repair loop is bounded, not unbounded retries — reuses the existing `AI_MAX_RETRIES`-capped `run()` pipeline (ADR-023), verified by `deepseekProvider.test.ts`'s repair-then-succeed and repair-exhausted-then-fallback cases
+- PASS budget-efficient: automated tests use MockAI exclusively, only a small number of live calls attempted — every `packages/ai`/`apps/server` test runs against `MockAIProvider`; exactly 2 new live calls in `deepseekSmokeTest.ts` for this phase
+- PASS a saved generated scenario is genuinely playable, not just validated — end-to-end real-socket test in `v0.5.test.ts` (generate → save → start a real game → execute a tool → submit a final diagnosis → receive a real score) plus a full real-browser run of the same flow
+- PASS a generated scenario is held to the same quality bar as a hand-authored one — the mock generator's output passes the full 14-check `evaluateScenarioQuality` checklist once materialized (`scenarioGeneration.test.ts`), same as all 3 built-in scenarios
+- PASS scenario id collisions are disambiguated, never silently overwritten — `uniqueScenarioId`, verified by a dedicated test generating the same description twice and asserting two distinct saved ids
+- PASS an invalid/unsaved scenario id is still rejected when starting a game — `INVALID_PAYLOAD`, verified unchanged from V0.3's equivalent check, now also checked against the `generated_scenarios` table
+- PASS authoring UI is lightweight, not a no-code editor — a description box, Generate, a read-only preview, Save; no field-by-field editing exists anywhere in `ScenarioGeneratorPanel.tsx`
+- PASS existing tests remain green — every V0.1-V0.4 test file (50 game-engine + 69 `packages/ai` + 56 server = 175 tests) continues to pass unmodified in behavior, including after the fractional-scenario DRY refactor
+- PASS new behavior has real test coverage — 12 new game-engine tests, 22 new `packages/ai` tests (`scenarioGeneration.test.ts` 8, plus 7 new `deepseekProvider.test.ts` generation cases, plus schema additions), 11 new server tests (`v0.5.test.ts`)
+- PASS docs updated — `docs/AI_DESIGN.md` (new "AI-Assisted Scenario Generation (V0.5)" section with a full pipeline diagram), `docs/DECISIONS.md` (ADR-023, ADR-024), `docs/DATABASE.md` (`generated_scenarios` table + JSONB rationale), `docs/WEBSOCKET_PROTOCOL.md` (new REST routes), `docs/GAME_DESIGN.md` ("Custom (AI-generated) scenarios" section), `docs/TESTING.md`
+
+**Tests run**: `packages/game-engine` 62/62 (was 50, +12 in new `scenarioGenerationValidator.test.ts`;
+all pre-existing tests unchanged in behavior after the fractional-scenario DRY refactor of the 3
+built-in scenario files). `packages/ai` 83/83 (was 69, +14 in new `scenarioGeneration.test.ts`
+[8] and extended `deepseekProvider.test.ts` [+6 net, 7 new generation cases]). `apps/server` 67/67
+(was 56, +11 in new `v0.5.test.ts`). Root `pnpm run build` / `pnpm run typecheck` / `pnpm run lint`
+all clean across all 5 workspace packages. Combined total across the whole monorepo: **212 automated
+tests, all passing.**
+
+**Runtime verification**: real Chromium (Playwright) end-to-end run — 3 real player joins → host
+expands "Generate a custom scenario," submits "A broken circuit breaker configuration causing
+cascading timeouts" → generation succeeds, passes structural validation and semantic review, preview
+card renders real tool/evidence counts → Save → scenario appears in the picker and gets auto-selected
+→ all players ready → host starts the game → in-game view renders normally (tools/evidence panel,
+timeline) with the generated content, not a built-in scenario's. Separately, `apps/server/src/scripts/
+deepseekSmokeTest.ts` extended with 2 new live-call attempts (see "DeepSeek calls made this phase").
+
+**DeepSeek calls made this phase**: 2 new live calls attempted (`generateScenario`,
+`semanticReviewScenario`, via `deepseekSmokeTest.ts`), alongside the pre-existing 5 (V0.1 + V0.4). All
+7 hit the sandbox's `403 Host not in allowlist: api.deepseek.com` network restriction — re-confirmed
+this phase with a real, plausible-looking `DEEPSEEK_API_KEY` supplied (the user asked mid-session
+whether a specific key worked; the answer is that this sandbox's outbound proxy rejects the CONNECT
+tunnel to `api.deepseek.com` before the key is ever checked, confirmed via a direct `curl` returning
+the identical 403 — a network-policy fact independent of which key is used, not a credential problem).
+The graceful-fallback path was verified for real for both new operations: genuine network failures,
+caught correctly, degraded to `MockAIProvider`, valid schema-conforming results returned with
+`meta.usedFallback: true`. No workaround was attempted. Real DeepSeek response quality for scenario
+generation/review was **not** verified this session — same documented gap as every other operation.
+
+**Approximate spend this phase**: $0.00 (a network-layer 403 is never billed — the request never
+reached the model). Cumulative: **$0.00 of $8.00**.
+
+**Bugs found**: none in new V0.5 code during this phase's review/testing. (The 3 built-in scenario
+files were refactored, not just extended, to extract the shared fractional-materialization helper —
+this was verified as a pure, behavior-preserving refactor by running the full pre-existing game-engine
+test suite unchanged before and after, rather than by inspection alone.)
+
+**Architecture changes**: `fractionalScenario.ts` is a new shared module in `packages/game-engine`
+that both the 3 built-in scenario builders and the new generated-scenario materialization path depend
+on — a genuine DRY improvement (3x duplicated logic → 1 implementation), not just new-feature-adjacent
+code. `scenarioGenerationValidator.ts` establishes a second, distinct validation layer alongside the
+existing `scenarioValidation.ts` (design-quality checklist) — deliberately not merged into one file,
+since they check different things (executability vs. design quality) and run at different points in
+the pipeline (before vs. after materialization). `gameLoader.resolveScenario` is the single new
+integration point where server code distinguishes a built-in scenario from a generated one; no other
+file needed to change to support playing a generated scenario.
+
+**Known remaining limitations**: the scenario-authoring UI has no way to edit a generated candidate
+field-by-field (by design — V0.5.7 explicitly scoped out a no-code editor; the only correction
+mechanism is regenerating with a clearer description). `POST /api/scenarios/generate` and `/save` are
+unauthenticated and not rate-limited beyond the flat socket-layer limiter that doesn't cover REST
+routes — acceptable at MVP scope (no accounts, no public deployment target yet) but would need
+attention before a public-facing deployment, same caveat as the rest of this project's known
+production-hardening gaps (no CI, no load testing). Real DeepSeek generation/review quality remains
+unverified in this sandboxed environment.
+
+---
+
+(V0.6 onward recorded below as each phase completes.)

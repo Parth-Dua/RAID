@@ -7,18 +7,24 @@
  * Calls 4-5 (V0.4) cover classifyTeamState/proposeIntervention - the "VERY SMALL number of live
  * requests" V0.4.6 calls for: just enough to check schema compliance and the qualitative
  * sanity of one classification and one intervention proposal against the real model.
+ * Calls 6-7 (V0.5) cover generateScenario/semanticReviewScenario - V0.5.6's "only a few live
+ * generation calls" requirement: one real generation (exercising the schema + the deterministic
+ * repair loop if the first attempt needs it) and one real review of that same candidate.
  *
  * NOTE: this could not be run to a real success in the sandboxed dev environment
  * this project was built in - its outbound network proxy does not have
  * api.deepseek.com in its egress allowlist (confirmed via a 403 "Host not in
- * allowlist" error, not a code bug). Re-confirmed unchanged during V0.4 (calls
- * 4-5 below, classifyTeamState/proposeIntervention, hit the identical 403). The
- * graceful-fallback path itself was verified for real by this exact failure:
- * every call below fell back to MockAIProvider automatically and the script
- * still completed successfully, at $0.00 spend (a network-layer 403 is never
- * billed - the request never reached the model). See docs/AI_DESIGN.md /
- * docs/EVALUATION.md / docs/MILESTONES.md for the full writeup. Run this from
- * an environment with open egress to confirm live DeepSeek response quality.
+ * allowlist" error, not a code bug). Re-confirmed unchanged during V0.4 and V0.5
+ * (every new call added in each phase hit the identical 403, including with a
+ * real, valid-looking DEEPSEEK_API_KEY present - the proxy rejects the CONNECT
+ * tunnel to api.deepseek.com before the request ever reaches DeepSeek's servers
+ * or the key is checked). The graceful-fallback path itself was verified for
+ * real by this exact failure: every call below fell back to MockAIProvider
+ * automatically and the script still completed successfully, at $0.00 spend (a
+ * network-layer 403 is never billed - the request never reached the model). See
+ * docs/AI_DESIGN.md / docs/EVALUATION.md / docs/MILESTONES.md for the full
+ * writeup. Run this from an environment with open egress to confirm live
+ * DeepSeek response quality.
  *
  * Usage: DEEPSEEK_API_KEY=... tsx src/scripts/deepseekSmokeTest.ts
  */
@@ -107,6 +113,19 @@ async function main() {
   console.log("kind:", intervention.result.kind, "message:", intervention.result.message, "targetRole:", intervention.result.targetRole);
   console.log("meta:", JSON.stringify(intervention.meta));
 
+  console.log("\n--- Real call 6 (V0.5): generateScenario from a free-text request ---");
+  const generated = await provider.generateScenario({
+    description: "Create an intermediate Kubernetes incident caused by a broken readiness configuration",
+    difficulty: "NORMAL",
+  });
+  console.log("title:", generated.result.title, "| tools:", generated.result.tools.length, "| evidence:", generated.result.evidence.length);
+  console.log("meta:", JSON.stringify(generated.meta));
+
+  console.log("\n--- Real call 7 (V0.5): semanticReviewScenario on that same candidate ---");
+  const review = await provider.semanticReviewScenario({ candidate: generated.result });
+  console.log("passed:", review.result.passed, "| issues:", JSON.stringify(review.result.issues));
+  console.log("meta:", JSON.stringify(review.meta));
+
   console.log(
     "\nDONE - all calls used provider:",
     h.meta.provider,
@@ -114,6 +133,8 @@ async function main() {
     final.meta.provider,
     classification.meta.provider,
     intervention.meta.provider,
+    generated.meta.provider,
+    review.meta.provider,
   );
   console.log(
     "usedFallback (should be false for all if the real API responded validly):",
@@ -122,6 +143,8 @@ async function main() {
     final.meta.usedFallback,
     classification.meta.usedFallback,
     intervention.meta.usedFallback,
+    generated.meta.usedFallback,
+    review.meta.usedFallback,
   );
 }
 

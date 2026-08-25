@@ -151,7 +151,7 @@ V0.1 — Core multiplayer incident simulator    [shipped]
 V0.2 — Playability + role balance             [shipped]
 V0.3 — Scenario expansion + replayability      [shipped]
 V0.4 — Adaptive multiplayer AI                [shipped]
-V0.5 — AI-assisted scenario generation
+V0.5 — AI-assisted scenario generation        [shipped]
 V0.6 — Social + replay layer
 ```
 
@@ -165,5 +165,6 @@ Current status and per-version acceptance results: [`docs/MILESTONES.md`](docs/M
 - No horizontal scaling built (single process) — the path is documented, not implemented.
 - No automated frontend test suite — covered by server-side integration tests against the same API surface plus scripted multi-session browser testing.
 - No CI pipeline — test commands are run by hand.
+- AI-generated scenarios (V0.5) have no field-by-field editor — the only way to change one is regenerating with a clearer description. Scenario generation/save endpoints are unauthenticated, acceptable at this MVP's accounts-free scope but worth revisiting before any public deployment.
 
 See [`docs/EVALUATION.md`](docs/EVALUATION.md) for a full scored self-assessment with evidence for and against each score.

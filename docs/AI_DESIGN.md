@@ -70,6 +70,9 @@ interface AIProvider {
   // V0.4
   classifyTeamState(input): Promise<{ result: TeamStateClassificationResult; meta: AIInvocationMeta }>;
   proposeIntervention(input): Promise<{ result: InterventionProposal; meta: AIInvocationMeta }>;
+  // V0.5
+  generateScenario(input): Promise<{ result: GeneratedScenario; meta: AIInvocationMeta }>;
+  semanticReviewScenario(input): Promise<{ result: SemanticReview; meta: AIInvocationMeta }>;
 }
 ```
 
@@ -293,6 +296,11 @@ not two. Even in the worst case this is bounded: a 20-minute game gets roughly 6
 checks total (`~180s` interval), and delivered interventions are hard-capped at 3 per game regardless
 of how many checks run.
 
+V0.5 scenario generation is entirely host-initiated (a lobby action, not something that fires on a
+timer or per-tick) — one `generateScenario` call and, only if that passes structural validation,
+exactly one `semanticReviewScenario` call, per "Generate" click. Saving a scenario
+(`POST /api/scenarios/save`) makes zero AI calls — it only re-runs the deterministic validator.
+
 Every invocation logs `{aiOperation, aiRequestId, aiProvider, aiLatencyMs, aiSuccess, aiUsedFallback}`
 (`apps/server/src/services/aiService.ts`) without ever logging the prompt content or the API key, so
 per-operation cost/latency/failure-rate is observable without a dedicated dashboard. `MockAIProvider`
@@ -300,33 +308,139 @@ is the default and what every automated test runs against — a full CI run cost
 
 ## Real-network verification status
 
-`apps/server/src/scripts/deepseekSmokeTest.ts` makes five real (non-mocked) calls to the live
-DeepSeek API — the original three (hypothesis ×2, final diagnosis) plus, as of V0.4, one
-`classifyTeamState` and one `proposeIntervention` call. Run in the sandboxed environment this project
-was built in (re-confirmed during V0.4, with a real `DEEPSEEK_API_KEY` present in `apps/server/.env`),
-all five calls returned a `403 Host not in allowlist: api.deepseek.com` from that environment's
-outbound proxy — a network policy restriction of the dev sandbox, not a code defect (confirmed both by
-inspecting the proxy's own status endpoint, which lists a fixed egress allowlist that doesn't include
-DeepSeek's domain, and by a direct `curl` to `api.deepseek.com` returning the identical CONNECT-tunnel
-403). This could not be worked around from inside the session, and no attempt was made to bypass the
-proxy (disabling TLS verification or unsetting `HTTPS_PROXY` is out of bounds regardless of the reason).
+`apps/server/src/scripts/deepseekSmokeTest.ts` makes seven real (non-mocked) calls to the live
+DeepSeek API — the original three (hypothesis ×2, final diagnosis), V0.4's `classifyTeamState` and
+`proposeIntervention`, and V0.5's `generateScenario` and `semanticReviewScenario`. Run in the
+sandboxed environment this project was built in (re-confirmed during V0.5, again with a real,
+plausible-looking `DEEPSEEK_API_KEY` supplied), all seven calls returned a
+`403 Host not in allowlist: api.deepseek.com` from that environment's outbound proxy — a network
+policy restriction of the dev sandbox, not a code defect (confirmed both by inspecting the proxy's own
+status endpoint, which lists a fixed egress allowlist that doesn't include DeepSeek's domain, and by a
+direct `curl` to `api.deepseek.com` returning the identical CONNECT-tunnel 403 *before the key is ever
+checked*). This could not be worked around from inside the session, and no attempt was made to bypass
+the proxy (disabling TLS verification or unsetting `HTTPS_PROXY` is out of bounds regardless of the
+reason) — this holds regardless of which specific key is supplied, since the block happens at the
+network layer, not at DeepSeek's auth layer.
 
-What this run *did* verify, for real, including the two new V0.4 operations: the fallback path. Every
-one of the five calls hit a genuine network failure (not a simulated one via `vi.stubGlobal`) and the
+What this run *did* verify, for real, including the two new V0.5 operations: the fallback path. Every
+one of the seven calls hit a genuine network failure (not a simulated one via `vi.stubGlobal`) and the
 provider correctly caught it, degraded to `MockAIProvider`, and returned a valid, schema-conforming
 result with `meta.usedFallback: true` and the real error message logged — exactly the behavior this
-document and `docs/DECISIONS.md` claim for a DeepSeek outage, now proven for `classifyTeamState`/
-`proposeIntervention` too, not just the original three operations. **Cost: $0.00** — a network-layer
-403 never reaches the model and is never billed. What was **not** verified in this environment: real
-DeepSeek response quality/latency at the actual model, for any of the five operations. Anyone running
-this project with open egress to `api.deepseek.com` can confirm that half with the same script — it
-requires no code change, only network access this sandbox didn't have.
+document and `docs/DECISIONS.md` claim for a DeepSeek outage, now proven for `generateScenario`/
+`semanticReviewScenario` too. **Cost: $0.00** — a network-layer 403 never reaches the model and is
+never billed. What was **not** verified in this environment: real DeepSeek response quality/latency at
+the actual model, for any of the seven operations. Anyone running this project with open egress to
+`api.deepseek.com` can confirm that half with the same script — it requires no code change, only
+network access this sandbox didn't have.
 
-## What was NOT built (as of V0.4): scenario generation
+## AI-Assisted Scenario Generation (V0.5)
 
-`generateScenario` is not part of the call path through V0.4 — all 3 scenarios
-(`packages/game-engine/src/scenarios/`) are authored as code so their causal chains, red herrings, and
-evidence-to-role mappings could be hand-tuned and validated against the structural checklist in
-`docs/GAME_DESIGN.md` before ever being played. `ScenarioSeedSchema` (`packages/ai/src/schemas.ts`)
-exists as a documented extension point — the shape a future `generateScenario` call would need to
-satisfy — rather than leaving that decision unmade. This is planned for V0.5.
+The 3 built-in scenarios (`packages/game-engine/src/scenarios/`) are hand-authored code, chosen
+deliberately so their causal chains, red herrings, and evidence-to-role mappings could be tuned and
+validated against the structural checklist before ever being played. V0.5 adds a fourth path to a
+playable scenario — AI generation from a free-text request like *"Create an intermediate Kubernetes
+incident caused by a broken readiness configuration"* — without lowering that bar: a generated
+scenario is played through the exact same engine code as a hand-authored one, and is held to the
+exact same 14-check quality bar before it can ever be saved.
+
+### Pipeline
+
+```mermaid
+sequenceDiagram
+    participant UI as Lobby authoring panel
+    participant Svc as scenarioGenerationService
+    participant Prov as AIProvider
+    participant SV as validateGeneratedScenario
+    participant DB as generated_scenarios
+
+    UI->>Svc: POST /api/scenarios/generate {description, difficulty}
+    Svc->>Prov: generateScenario(...)
+    Note over Prov: GENERATE -> schema/structural VALIDATE -> REPAIR retry -> REVALIDATE<br/>(reuses the existing repair-prompt retry loop, see below)
+    Prov-->>Svc: structurally-valid GeneratedScenario
+    Svc->>Prov: semanticReviewScenario(candidate)  — exactly ONE call
+    Prov-->>Svc: {passed, issues}
+    Svc-->>UI: {candidate, validation, semanticReview, eligibleToSave}
+    UI->>UI: host inspects preview + validation results
+    UI->>Svc: POST /api/scenarios/save {candidate}
+    Svc->>SV: re-validate (deterministic, no AI call)
+    Svc->>DB: persist (id disambiguated against every existing scenario id)
+    Svc-->>UI: {scenarioId, catalogEntry}
+```
+
+### Strict Generation Schema (V0.5.2) + Deterministic Validator (V0.5.3)
+
+Two independent layers, deliberately not merged into one, because they check different things:
+
+- **`GeneratedScenarioSchema`** (`packages/ai/src/schemas.ts`) is the *shape* check — every field
+  present, every string/array within bounds, every enum a real value. This is what "never accept raw
+  arbitrary content as valid" means at the wire level; a response that doesn't parse against this
+  schema is rejected before any domain code ever sees it.
+- **`validateGeneratedScenario`** (`packages/game-engine/src/scenarioGenerationValidator.ts`) is the
+  *cross-reference and executability* check a shape schema can't express: does every
+  `evidence.unlock.toolId` name a real tool? Does every `rootCause.keyEvidenceIds` entry name real
+  evidence? Are there duplicate tool/evidence ids? Is the timeline monotonic? Does every
+  investigative role have at least one tool (is this scenario actually playable)? Do the rubric
+  weights sum to 100? This function has zero dependency on which AI provider produced the
+  candidate — the same function protects a live DeepSeek generation, a `MockAIProvider` generation
+  (every automated test), and a human-submitted `/save` payload alike (defense in depth: `/save`
+  re-runs it even though `/generate` already did, in case the client payload was tampered with).
+
+A candidate that passes both is then, and only then, run through one more check: materialized (see
+below) and passed through `evaluateScenarioQuality` — the exact same 14-check structural-quality
+checklist (docs/GAME_DESIGN.md) every hand-authored scenario is held to. This is what "held to the
+same bar" means concretely, not just as a stated goal.
+
+### Repair Loop (V0.5.5) — reused infrastructure, not new machinery
+
+The GENERATE → VALIDATE → IDENTIFY FAILURES → REPAIR → REVALIDATE loop is not new code:
+`DeepSeekProvider.generateScenario` passes `validateGeneratedScenario` as the exact same
+"semantic validation" callback every other operation's `run()` pipeline already takes (see "AI
+response validation loop" above). A structurally broken candidate — a dangling tool reference, a
+duplicate id, an unbalanced role — triggers the same bounded, in-conversation repair-prompt retry
+(capped by `AI_MAX_RETRIES`) that a leaked hypothesis rationale or a hallucinated evidence id
+already triggers elsewhere. This is a deliberate reuse, not a coincidence: it means V0.5.5's "bounded
+retries, small configured max attempts" requirement was satisfied by *not* building a second retry
+mechanism.
+
+### Semantic Review (V0.5.4) — one call, only when structurally valid
+
+`semanticReviewScenario` is a *separate*, single AI call made only after a candidate already passed
+both the schema and the deterministic validator — never spent reviewing something already known to
+be broken, and never invoked more than once per generation attempt (`scenarioGenerationService.ts`
+calls it exactly once; there is no loop). It reviews six specific, named dimensions (causal
+consistency, role balance, answer leakage, red-herring plausibility, remediation validity, scenario
+coherence) and returns `{passed, issues[]}` — a design-coherence judgment a mechanical checklist
+can't make (e.g. "is this red herring *actually* plausible-sounding," not just "does one exist").
+
+### Materialization — a generated scenario plays through the exact same engine
+
+A generated scenario is authored (by the AI) in the identical difficulty-neutral,
+duration-neutral, fractional-time shape (`GeneratedScenarioDefinition`) every hand-authored scenario
+now uses internally — `materializeFractionalEvidence`/`materializeFractionalTimeline`
+(`packages/game-engine/src/fractionalScenario.ts`) were extracted from the 3 built-in scenario files
+into one shared function specifically so a generated scenario doesn't need a second implementation
+of "scale fractions to this game's actual duration." `buildGeneratedScenario` composes that
+materializer with the same `applyDifficulty()` every built-in scenario uses. The result is: by the
+time a generated scenario reaches `gameLoader`/`gameService`/scoring/the Game Master, it is
+indistinguishable from a built-in one — no code downstream of `gameLoader.resolveScenario` (the one
+place that checks "built-in registry, or fall back to the `generated_scenarios` table") has any
+awareness a scenario was AI-generated.
+
+### Budget-Efficient Live Evaluation (V0.5.6)
+
+Every automated test (`packages/ai`, `apps/server`) runs against `MockAIProvider.generateScenario` —
+a deterministic, parameterized template (not real language generation) that always produces a
+structurally-valid candidate regardless of input description, so the full pipeline (generate →
+validate → review → save → play a real game against it) is exercisable, deterministically, with zero
+AI spend. `deepseekSmokeTest.ts` makes exactly 2 live calls for this phase (one `generateScenario`,
+one `semanticReviewScenario` on that same candidate) — see "Real-network verification status" below.
+
+### Scenario Authoring UI (V0.5.7)
+
+Deliberately lightweight (`apps/web/src/components/ScenarioGeneratorPanel.tsx`): a description box, a
+Generate button, a compact preview (title/briefing/severity/tool+evidence counts) with the
+validation/review results, and a Save button. There is no field-by-field editor — if a candidate
+isn't good enough, the fix is regenerating with a clearer description, not hand-tweaking individual
+evidence items in the UI. Saving immediately adds the scenario to the lobby's existing scenario
+picker (`GET /api/scenarios` merges the 3 built-in entries with every saved generated one) and
+auto-selects it, so a host can generate a scenario and start playing it in the same lobby session.

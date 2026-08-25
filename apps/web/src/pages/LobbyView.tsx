@@ -4,6 +4,7 @@ import type { Difficulty, ScenarioCatalogEntry } from "@raid/shared";
 import { useGame } from "../state/GameProvider.js";
 import { clearIdentity } from "../state/identity.js";
 import { getScenarioCatalog } from "../api/http.js";
+import { ScenarioGeneratorPanel } from "../components/ScenarioGeneratorPanel.js";
 
 export function LobbyView({ roomCode }: { roomCode: string }) {
   const { roomSnapshot, myPlayerId, actions } = useGame();
@@ -118,6 +119,13 @@ export function LobbyView({ roomCode }: { roomCode: string }) {
           {isHost && (
             <div className="bg-ink-900 border border-ink-700 rounded-lg p-4">
               <div className="text-xs text-ink-300 uppercase tracking-wide mb-2">Scenario (host only)</div>
+              <ScenarioGeneratorPanel
+                difficulty={difficulty}
+                onSaved={(entry) => {
+                  setScenarios((prev) => [...prev, entry]);
+                  setScenarioId(entry.id);
+                }}
+              />
               <div className="flex flex-col gap-1.5 mb-3">
                 {scenarios.map((s) => (
                   <button

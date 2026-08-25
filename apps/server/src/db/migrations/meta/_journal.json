@@ -43,6 +43,13 @@
       "when": 1787640636718,
       "tag": "0005_spicy_naoko",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787645505346,
+      "tag": "0006_new_shockwave",
+      "breakpoints": true
     }
   ]
 }
